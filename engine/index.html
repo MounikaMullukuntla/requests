@@ -1,702 +1,1244 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en-us">
-<head>
-<meta charset="UTF-8">
-<meta http-equiv="content-type" content="text/html; charset=UTF-8">
-<title>Arts Engine — Storyboard Generator</title>
-<link rel="shortcut icon" href="data:image/x-icon;," type="image/x-icon">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <title>Arts Engine — Storyboard Generator</title>
+    <link rel="shortcut icon" href="data:image/x-icon;," type="image/x-icon" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-<script>
-if (typeof param === 'undefined') { var param = {}; }
-param.showsearch = "false";
-</script>
+    <script>
+      if (typeof param === "undefined") {
+        var param = {};
+      }
+      param.showsearch = "false";
+    </script>
 
-<link type="text/css" rel="stylesheet" href="/localsite/css/base.css" id="/localsite/css/base.css" />
-<link type="text/css" rel="stylesheet" href="/projects/css/issues.css" />
-<link type="text/css" rel="stylesheet" href="css/app.css" />
+    <link
+      type="text/css"
+      rel="stylesheet"
+      href="/localsite/css/base.css"
+      id="/localsite/css/base.css"
+    />
+    <link type="text/css" rel="stylesheet" href="/projects/css/issues.css" />
+    <link type="text/css" rel="stylesheet" href="css/app.css" />
+    <link type="text/css" rel="stylesheet" href="css/node-canvas.css" />
 
-<script type="text/javascript" src="/localsite/js/localsite.js?showheader=true"></script>
-<script type="text/javascript" src="/projects/js/issues.js"></script>
+    <script
+      type="text/javascript"
+      src="/localsite/js/localsite.js?showheader=true"
+    ></script>
+    <script type="text/javascript" src="/projects/js/issues.js"></script>
 
-<!-- Shared GitHub / Resource-Area components (Web Components bundle) -->
-<script defer src="/chat/packages/github-components/dist/github-components.js"></script>
+    <!-- Shared GitHub / Resource-Area components (Web Components bundle) -->
+    <script
+      defer
+      src="/chat/packages/github-components/dist/github-components.js"
+    ></script>
 
-<!--
+    <!--
   Config loader — reads template/config.yaml (or local config.yaml override).
   Populates #ae-title, #ae-subtitle, and window.AE_API_BASE before app.js runs.
   Inline fallback text in the HTML elements renders instantly if fetch is slow.
 -->
-<script>
-window.AE_CONFIG_PROMISE = (async function applyConfig() {
-  function parseYaml(text) {
-    const cfg = {};
-    text.split('\n').forEach(line => {
-      const t = line.trim();
-      if (!t || t.startsWith('#')) return;
-      const i = t.indexOf(':');
-      if (i < 0) return;
-      const key = t.slice(0, i).trim();
-      let val = t.slice(i + 1).trim().replace(/#[^"']*$/, '').trim();
-      val = val.replace(/^["']|["']$/g, '');
-      cfg[key] = val;
-    });
-    return cfg;
-  }
+    <script>
+      window.AE_CONFIG_PROMISE = (async function applyConfig() {
+        function parseYaml(text) {
+          const cfg = {};
+          text.split("\n").forEach((line) => {
+            const t = line.trim();
+            if (!t || t.startsWith("#")) return;
+            const i = t.indexOf(":");
+            if (i < 0) return;
+            const key = t.slice(0, i).trim();
+            let val = t
+              .slice(i + 1)
+              .trim()
+              .replace(/#[^"']*$/, "")
+              .trim();
+            val = val.replace(/^["']|["']$/g, "");
+            cfg[key] = val;
+          });
+          return cfg;
+        }
 
-  let cfg = {};
-  // Try local config.yaml first (agent override), then shared template
-  for (const path of ['./config.yaml', '/requests/template/config.yaml']) {
-    try {
-      const r = await fetch(path);
-      if (r.ok) { cfg = parseYaml(await r.text()); break; }
-    } catch (_) {}
-  }
+        let cfg = {};
+        // Try local config.yaml first (agent override), then shared template
+        for (const path of [
+          "./config.yaml",
+          "/requests/template/config.yaml",
+        ]) {
+          try {
+            const r = await fetch(path);
+            if (r.ok) {
+              cfg = parseYaml(await r.text());
+              break;
+            }
+          } catch (_) {}
+        }
 
-  // Storyboard builder
-  const title    = cfg.title    || 'Arts Engine';
-  const subtitle = cfg.subtitle || 'Video, image & text generation via xAI, Claude, Gemini, OpenAI APIs';
-  const icon     = cfg.icon     || 'auto_awesome';
+        // Storyboard builder
+        const title = cfg.title || "Arts Engine";
+        const subtitle =
+          cfg.subtitle ||
+          "Video, image & text generation via xAI, Claude, Gemini, OpenAI APIs";
+        const icon = cfg.icon || "auto_awesome";
 
-  document.title = title + ' — Storyboard Generator';
+        document.title = title + " — Storyboard Generator";
 
-  const titleEl = document.getElementById('ae-title');
-  if (titleEl) {
-    titleEl.innerHTML =
-      `<span class="material-icons" style="vertical-align:middle;margin-right:8px;color:#4a90e2">${icon}</span>${title}`;
-  }
+        const titleEl = document.getElementById("ae-title");
+        if (titleEl) {
+          titleEl.innerHTML = `<span class="material-icons" style="vertical-align:middle;margin-right:8px;color:#4a90e2">${icon}</span>${title}`;
+        }
 
-  const subtitleEl = document.getElementById('ae-subtitle');
-  if (subtitleEl) subtitleEl.textContent = subtitle;
+        const subtitleEl = document.getElementById("ae-subtitle");
+        if (subtitleEl) subtitleEl.textContent = subtitle;
 
-  // Make api_base available to app.js via global
-  if (cfg.api_base) window.AE_API_BASE = cfg.api_base;
-})();
-</script>
+        // Make api_base available to app.js via global
+        if (cfg.api_base) window.AE_API_BASE = cfg.api_base;
+      })();
+    </script>
 
-<style>
-/* Output panel — sections side by side, labels left of controls */
-.ae-output-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px 24px;
-}
-.ae-model-section,
-.ae-output-controls {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.ae-model-label,
-.ae-output-controls h3 {
-  margin: 0;
-  white-space: nowrap;
-}
-.ae-model-section {
-  flex: 0 0 100%;
-}
-</style>
-</head>
+    <style>
+      /* Output panel — sections side by side, labels left of controls */
+      .ae-output-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px 24px;
+      }
+      .ae-model-section,
+      .ae-output-controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .ae-model-label,
+      .ae-output-controls h3 {
+        margin: 0;
+        white-space: nowrap;
+      }
+      .ae-model-section {
+        flex: 0 0 100%;
+      }
+    </style>
+  </head>
 
-<body>
-<div class="content contentpadding" style="padding-top:30px; max-width:1600px">
+  <body>
+    <div
+      class="content contentpadding"
+      style="padding-top: 30px; max-width: 1600px"
+    >
+      <!-- Page header — content populated from config.yaml, inline fallback shown instantly -->
+      <div style="margin-bottom: 24px">
+        <h1 style="margin: 0 0 6px 0; font-size: 1.8rem" id="ae-title">
+          <span
+            class="material-icons"
+            style="vertical-align: middle; margin-right: 8px; color: #4a90e2"
+            >auto_awesome</span
+          >Arts Engine
+        </h1>
+        <span
+          style="margin: 0; color: #888; font-size: 0.95rem"
+          id="ae-subtitle"
+        >
+          Video, image &amp; text generation via xAI, Claude, Gemini, OpenAI
+          APIs
+          <!-- · Storyboard Builder -->
+        </span>
+        - <a href="rust-api/src/providers">API Provider Architecture</a><br />
 
-  <!-- Page header — content populated from config.yaml, inline fallback shown instantly -->
-  <div style="margin-bottom:24px">
-    <h1 style="margin:0 0 6px 0; font-size:1.8rem" id="ae-title">
-      <span class="material-icons" style="vertical-align:middle;margin-right:8px;color:#4a90e2">auto_awesome</span>Arts Engine
-    </h1>
-    <span style="margin:0; color:#888; font-size:0.95rem" id="ae-subtitle">
-      Video, image &amp; text generation via xAI, Claude, Gemini, OpenAI APIs <!-- · Storyboard Builder -->
-    </span>
-    - <a href='rust-api/src/providers'>API Provider Architecture</a><br>
+        <div class="ae-backend-status" style="margin-top: 8px">
+          <span style="font-size: 0.95rem; color: #888">
+            <span id="backendStartInstruction"
+              ><strong
+                >Run "start art" on your localhost webroot via CLI commands to
+                start the Rust API on port 8082</strong
+              ><br
+            /></span>
+            <span id="backendLabel">Checking backend on port 8082…</span>
+          </span>
+        </div>
+      </div>
 
-    <div class="ae-backend-status" style="margin-top:8px">
-      <span style="font-size:0.95rem;color:#888;">
-        <span id="backendStartInstruction"><strong>Run "start art" on your localhost webroot via CLI commands to start the Rust API on port 8082</strong><br></span>
-        <span id="backendLabel">Checking backend on port 8082…</span>
-      </span>
-    </div>
-  </div>
-
-  <!-- Main layout: 65% left / 35% right -->
-  <div class="ae-container">
-
-    <!-- =================================================================
+      <!-- Main layout: 65% left / 35% right -->
+      <div class="ae-container">
+        <!-- =================================================================
          LEFT COLUMN — Prompt, Controls, Storyboard, Gallery
          ================================================================= -->
-    <div class="ae-left">
-
-      <!-- Model panel (model keys + selection) — sits directly above Generate -->
-      <div class="ae-panel" id="modelPanel">
-        <div class="ae-output-header">
-
-          <div class="ae-model-section">
-            <h3 class="ae-model-label">Model</h3>
-            <div id="modelRow">
-              <div class="sp-model-wrap">
-                <button class="sp-model-trigger" id="modelTrigger" type="button"></button>
-                <div class="sp-model-menu" id="modelMenu" hidden></div>
+        <div class="ae-left">
+          <!-- Model panel (model keys + selection) — sits directly above Generate -->
+          <div class="ae-panel" id="modelPanel">
+            <div class="ae-output-header">
+              <div class="ae-model-section">
+                <h3 class="ae-model-label">Model</h3>
+                <div id="modelRow">
+                  <div class="sp-model-wrap">
+                    <button
+                      class="sp-model-trigger"
+                      id="modelTrigger"
+                      type="button"
+                    ></button>
+                    <div class="sp-model-menu" id="modelMenu" hidden></div>
+                  </div>
+                </div>
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    margin-left: auto;
+                  "
+                >
+                  <span
+                    class="material-icons"
+                    id="toggleSettingsBtn"
+                    title="Settings"
+                    style="
+                      cursor: pointer;
+                      color: #888;
+                      font-size: 1.3rem;
+                      vertical-align: middle;
+                    "
+                    onclick="toggleSettingsContainer(event)"
+                    >settings</span
+                  >
+                  <a href="#" id="toggleAgentsEditor" class="btn btn-nice"
+                    >My Model Keys</a
+                  >
+                </div>
               </div>
+
+              <div id="settingsContainer" style="display: none; flex: 0 0 100%">
+                <div class="ae-settings-row">
+                  <div style="font-size: 0.8rem; color: #aaa; line-height: 1.6">
+                    <strong>Backend URL:</strong><br />
+                    <code
+                      id="apiBaseInput"
+                      style="
+                        background: rgba(0, 0, 0, 0.06);
+                        padding: 2px 6px;
+                        border-radius: 4px;
+                        font-size: 0.78rem;
+                      "
+                      >http://localhost:8082</code
+                    >
+                  </div>
+                  <div style="font-size: 0.8rem; color: #aaa; line-height: 1.6">
+                    <strong>Start Rust backend:</strong><br />
+                    <code
+                      style="
+                        background: rgba(0, 0, 0, 0.06);
+                        padding: 2px 6px;
+                        border-radius: 4px;
+                        font-size: 0.78rem;
+                      "
+                    >
+                      cd requests/engine/rust-api &amp;&amp; cargo run
+                    </code>
+                  </div>
+                  <div style="font-size: 0.8rem; color: #aaa; line-height: 1.6">
+                    Add
+                    <code
+                      style="
+                        background: rgba(0, 0, 0, 0.06);
+                        padding: 2px 4px;
+                        border-radius: 4px;
+                      "
+                      >XAI_API_KEY</code
+                    >
+                    to
+                    <code
+                      style="
+                        background: rgba(0, 0, 0, 0.06);
+                        padding: 2px 4px;
+                        border-radius: 4px;
+                      "
+                      >docker/.env</code
+                    >
+                  </div>
+                </div>
+              </div>
+
+              <div
+                id="agentsContainer"
+                style="
+                  display: none;
+                  flex: 0 0 100%;
+                  padding-bottom: 12px;
+                  margin-bottom: 12px;
+                "
+              ></div>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;margin-left:auto">
-              <span class="material-icons" id="toggleSettingsBtn" title="Settings"
-                style="cursor:pointer;color:#888;font-size:1.3rem;vertical-align:middle"
-                onclick="toggleSettingsContainer(event)">settings</span>
-              <a href="#" id="toggleAgentsEditor" class="btn btn-nice">My Model Keys</a>
-            </div>
+
+            <div id="statusBar" style="display: none"></div>
           </div>
 
-          <div id="settingsContainer" style="display:none;flex:0 0 100%;">
-            <div class="ae-settings-row">
-              <div style="font-size:0.8rem;color:#aaa;line-height:1.6">
-                <strong>Backend URL:</strong><br>
-                <code id="apiBaseInput" style="background:rgba(0,0,0,0.06);padding:2px 6px;border-radius:4px;font-size:0.78rem">http://localhost:8082</code>
-              </div>
-              <div style="font-size:0.8rem;color:#aaa;line-height:1.6">
-                <strong>Start Rust backend:</strong><br>
-                <code style="background:rgba(0,0,0,0.06);padding:2px 6px;border-radius:4px;font-size:0.78rem">
-                  cd requests/engine/rust-api &amp;&amp; cargo run
-                </code>
-              </div>
-              <div style="font-size:0.8rem;color:#aaa;line-height:1.6">
-                Add <code style="background:rgba(0,0,0,0.06);padding:2px 4px;border-radius:4px">XAI_API_KEY</code>
-                to <code style="background:rgba(0,0,0,0.06);padding:2px 4px;border-radius:4px">docker/.env</code>
+          <!-- Prompt Input Panel -->
+          <div class="ae-panel" id="promptPanel">
+            <h3>Generate</h3>
+            <div class="ae-output-controls">
+              <div
+                style="
+                  display: flex;
+                  align-items: center;
+                  flex-wrap: wrap;
+                  gap: 12px;
+                  width: 100%;
+                "
+              >
+                <div class="ae-type-row">
+                  <button class="ae-type-btn" data-type="text">
+                    <span
+                      class="material-icons"
+                      style="font-size: 0.95rem; vertical-align: middle"
+                      >text_snippet</span
+                    >
+                    Text
+                  </button>
+                  <button class="ae-type-btn active" data-type="image">
+                    <span
+                      class="material-icons"
+                      style="font-size: 0.95rem; vertical-align: middle"
+                      >image</span
+                    >
+                    Image
+                  </button>
+                  <button class="ae-type-btn" data-type="video">
+                    <span
+                      class="material-icons"
+                      style="font-size: 0.95rem; vertical-align: middle"
+                      >videocam</span
+                    >
+                    Video
+                  </button>
+                  <button
+                    class="ae-type-btn disabled"
+                    id="button3d"
+                    data-type="3d"
+                    style="display: none"
+                    title="3D model output (Meshy / Tripo)"
+                  >
+                    <span
+                      class="material-icons"
+                      style="font-size: 0.95rem; vertical-align: middle"
+                      >view_in_ar</span
+                    >
+                    3D
+                  </button>
+                </div>
+
+                <div
+                  style="
+                    margin-left: auto;
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                  "
+                >
+                  <div
+                    class="ae-variations-row"
+                    id="maxTokensRow"
+                    style="margin: 0; align-self: center; display: none"
+                  >
+                    <label for="maxTokensInput">Max tokens:</label>
+                    <input
+                      type="number"
+                      id="maxTokensInput"
+                      min="1"
+                      max="32000"
+                      step="64"
+                      value="1024"
+                    />
+                  </div>
+
+                  <div
+                    class="ae-variations-row"
+                    style="margin: 0; align-self: center"
+                  >
+                    <label for="variationsInput">Variations:</label>
+                    <input
+                      type="number"
+                      id="variationsInput"
+                      min="1"
+                      max="4"
+                      value="2"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
+            <textarea
+              id="promptInput"
+              placeholder="Enter a prompt… (Ctrl+Enter to generate)"
+            ></textarea>
+            <p style="margin: 6px 0 10px; font-size: 0.8rem; color: #aaa">
+              Example: A honey bee near wildflowers at golden hour,
+              photorealistic
+            </p>
 
-          <div id="agentsContainer" style="display:none; flex:0 0 100%; padding-bottom:12px; margin-bottom:12px;"></div>
-
-
-        </div>
-
-        <div id="statusBar" style="display:none"></div>
-      </div>
-
-      <!-- Prompt Input Panel -->
-      <div class="ae-panel" id="promptPanel">
-        <h3>Generate</h3>
-        <div class="ae-output-controls">
-          <div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px;width:100%">
-            <div class="ae-type-row">
-              <button class="ae-type-btn" data-type="text">
-                <span class="material-icons" style="font-size:0.95rem;vertical-align:middle">text_snippet</span>
-                Text
+            <div
+              style="
+                margin-bottom: 20px;
+                display: flex;
+                align-items: center;
+                gap: 14px;
+                flex-wrap: wrap;
+              "
+            >
+              <button id="generateBtn">
+                <span class="material-icons">auto_awesome</span>
+                <span id="generateBtnLabel">Generate</span>
               </button>
-              <button class="ae-type-btn active" data-type="image">
-                <span class="material-icons" style="font-size:0.95rem;vertical-align:middle">image</span>
-                Image
-              </button>
-              <button class="ae-type-btn" data-type="video">
-                <span class="material-icons" style="font-size:0.95rem;vertical-align:middle">videocam</span>
-                Video
-              </button>
-              <button class="ae-type-btn disabled" id="button3d" data-type="3d" style="display:none;" title="3D model output (Meshy / Tripo)">
-                <span class="material-icons" style="font-size:0.95rem;vertical-align:middle">view_in_ar</span>
-                3D
-              </button>
             </div>
 
-            <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
-              <div class="ae-variations-row" id="maxTokensRow" style="margin:0;align-self:center;display:none">
-                <label for="maxTokensInput">Max tokens:</label>
-                <input type="number" id="maxTokensInput" min="1" max="32000" step="64" value="1024">
+            <div
+              id="scenePromptPreview"
+              style="display: none; margin: 0 0 6px; font-size: 0.82rem"
+            >
+              <div
+                style="
+                  display: flex;
+                  align-items: center;
+                  gap: 12px;
+                  flex-wrap: wrap;
+                "
+              >
+                <strong style="font-size: 0.95rem">Appended to prompt:</strong>
+                <label
+                  id="selectedSceneLabel"
+                  style="
+                    display: none;
+                    align-items: center;
+                    font-size: 0.85rem;
+                    color: #888;
+                    cursor: pointer;
+                  "
+                >
+                  <input
+                    type="checkbox"
+                    id="selectedSceneCheck"
+                    checked
+                    style="cursor: pointer; margin-right: 4px"
+                  /><span>Scene: <span id="selectedSceneName"></span></span>
+                </label>
+                <a
+                  id="adjustPromptLink"
+                  href="#"
+                  style="
+                    display: none;
+                    font-size: 0.8rem;
+                    color: #4a90e2;
+                    text-decoration: none;
+                  "
+                  onclick="artsEngine.toggleSceneUsage(event)"
+                  >Adjust Prompt</a
+                >
               </div>
+            </div>
 
-              <div class="ae-variations-row" style="margin:0;align-self:center">
-                <label for="variationsInput">Variations:</label>
-                <input type="number" id="variationsInput" min="1" max="4" value="2">
+            <!-- Scene column usage — revealed by "Adjust Prompt" link -->
+            <div
+              id="sceneColumnUsage"
+              style="
+                display: none;
+                margin: 0 0 10px;
+                padding: 10px 12px;
+                border: 1px solid rgba(74, 144, 226, 0.25);
+                border-radius: 8px;
+                background: rgba(74, 144, 226, 0.04);
+                font-size: 0.82rem;
+              "
+            >
+              <div
+                style="
+                  display: flex;
+                  gap: 10px;
+                  align-items: center;
+                  flex-wrap: wrap;
+                  margin-bottom: 8px;
+                "
+              >
+                <label
+                  style="
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                    color: #888;
+                  "
+                  >Mode:
+                  <select
+                    id="sceneMode"
+                    onchange="artsEngine.updatePromptPreview()"
+                    class="ls-select"
+                  >
+                    <option value="append">Append to prompt</option>
+                    <option value="template">
+                      Template — use {column} in prompt
+                    </option>
+                    <option value="replace">Replace prompt</option>
+                  </select>
+                </label>
+                <label
+                  style="
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                    color: #888;
+                  "
+                  >Format:
+                  <select
+                    id="sceneFormat"
+                    onchange="artsEngine.updatePromptPreview()"
+                    class="ls-select"
+                  >
+                    <option value="keyval">Key: value</option>
+                    <option value="bullets">Bullet list</option>
+                    <option value="json">JSON</option>
+                    <option value="inline">Inline</option>
+                  </select>
+                </label>
+                <div style="margin-left: auto; display: flex; gap: 6px">
+                  <button
+                    class="ae-csv-btn"
+                    onclick="artsEngine.selectSceneCols('universal')"
+                    style="font-size: 0.75rem; padding: 2px 8px"
+                  >
+                    Universal
+                  </button>
+                  <button
+                    class="ae-csv-btn"
+                    onclick="artsEngine.selectSceneCols('all')"
+                    style="font-size: 0.75rem; padding: 2px 8px"
+                  >
+                    All
+                  </button>
+                  <button
+                    class="ae-csv-btn"
+                    onclick="artsEngine.selectSceneCols('none')"
+                    style="font-size: 0.75rem; padding: 2px 8px"
+                  >
+                    None
+                  </button>
+                </div>
               </div>
+              <div id="sceneColumnList"></div>
+            </div>
+
+            <pre id="scenePromptPreviewText"></pre>
+          </div>
+
+          <!-- Gallery Panel (revealed after first generation) -->
+          <div class="ae-panel" id="galleryPanel">
+            <h3
+              style="
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+              "
+            >
+              <span>
+                <span
+                  class="material-icons"
+                  style="
+                    font-size: 1rem;
+                    vertical-align: middle;
+                    margin-right: 4px;
+                  "
+                  >photo_library</span
+                >
+                Generated Output
+              </span>
+              <button
+                id="rawToggleBtn"
+                title="View raw API response"
+                onclick="artsEngine && artsEngine.toggleRaw()"
+                style="
+                  background: none;
+                  border: none;
+                  cursor: pointer;
+                  padding: 2px 4px;
+                  color: #aaa;
+                  line-height: 1;
+                "
+              >
+                <span
+                  class="material-icons"
+                  style="font-size: 1.1rem; vertical-align: middle"
+                  >settings</span
+                >
+              </button>
+            </h3>
+            <div id="gallery" class="ae-gallery"></div>
+            <pre
+              id="rawPanel"
+              style="
+                display: none;
+                margin-top: 14px;
+                padding: 12px;
+                background: #f6f8fa;
+                border-radius: 8px;
+                font-size: 0.75rem;
+                overflow: auto;
+                max-height: 300px;
+                white-space: pre-wrap;
+                word-break: break-all;
+                color: #333;
+              "
+            ></pre>
+          </div>
+
+          <!-- Aspect Ratio Selector -->
+          <div class="ae-panel">
+            <h3>Aspect Ratio</h3>
+            <div class="ae-ratio-group">
+              <!-- Square 1:1 -->
+              <button class="ae-ratio-btn" data-ratio="square">
+                <div class="ratio-icon">
+                  <div
+                    class="ratio-box"
+                    style="width: 32px; height: 32px"
+                  ></div>
+                </div>
+                <span class="ratio-label">Square 1:1</span>
+              </button>
+
+              <!-- Landscape Wide 16:9 -->
+              <button class="ae-ratio-btn" data-ratio="landscape-wide">
+                <div class="ratio-icon">
+                  <div
+                    class="ratio-box"
+                    style="width: 48px; height: 27px"
+                  ></div>
+                </div>
+                <span class="ratio-label">Wide 16:9</span>
+              </button>
+
+              <!-- Landscape 4:3 -->
+              <button class="ae-ratio-btn" data-ratio="landscape">
+                <div class="ratio-icon">
+                  <div
+                    class="ratio-box"
+                    style="width: 40px; height: 30px"
+                  ></div>
+                </div>
+                <span class="ratio-label">Landscape 4:3</span>
+              </button>
+
+              <!-- Portrait Tall 9:16 -->
+              <button class="ae-ratio-btn" data-ratio="portrait-tall">
+                <div class="ratio-icon">
+                  <div
+                    class="ratio-box"
+                    style="width: 18px; height: 32px"
+                  ></div>
+                </div>
+                <span class="ratio-label">Tall 9:16</span>
+              </button>
+
+              <!-- Portrait 3:4 -->
+              <button class="ae-ratio-btn" data-ratio="portrait">
+                <div class="ratio-icon">
+                  <div
+                    class="ratio-box"
+                    style="width: 24px; height: 32px"
+                  ></div>
+                </div>
+                <span class="ratio-label">Portrait 3:4</span>
+              </button>
             </div>
           </div>
-        </div>
-        <textarea id="promptInput"
-          placeholder="Enter a prompt… (Ctrl+Enter to generate)"></textarea>
-        <p style="margin:6px 0 10px;font-size:0.8rem;color:#aaa">Example: A honey bee near wildflowers at golden hour, photorealistic</p>
+          <!-- Node Canvas — draggable scene flowchart (ComfyUI / Flora style) -->
+          <div class="ae-panel" id="nodeCanvasPanel">
+            <h3>
+              <span
+                class="material-icons"
+                style="
+                  font-size: 1rem;
+                  vertical-align: middle;
+                  margin-right: 4px;
+                "
+                >hub</span
+              >
+              Node Canvas
+              <span
+                style="
+                  font-size: 0.72rem;
+                  font-weight: 400;
+                  color: #aaa;
+                  margin-left: 6px;
+                "
+                >beta</span
+              >
+            </h3>
+            <p style="margin: 0 0 12px 0; font-size: 0.85rem; color: #888">
+              Flora-style flow built from separate nodes: a
+              <strong>Text</strong> node (prompt), an
+              <strong>Image</strong> node (upload), and a
+              <strong>Generate</strong> node with its own
+              <strong>model dropdown</strong> — the node adapts to the chosen
+              model: the orange image-input port appears only when the model
+              supports image input, and the output type (image / text / video /
+              3D) follows the model's capabilities. Wire an output port (●) to a
+              matching input port (purple = text, orange = image); a Generate
+              output can feed another node. Click <strong>Next</strong>
+              to auto-chain a follow-up scene. Generated images also appear
+              below in the Storyboard Flow. Uses the provider keys from "My
+              Model Keys" above.
+            </p>
+            <div id="nodeCanvasMount"></div>
+          </div>
 
-        <div style="margin-bottom:20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-          <button id="generateBtn">
-            <span class="material-icons">auto_awesome</span>
-            <span id="generateBtnLabel">Generate</span>
-          </button>
-        </div>
+          <!-- Storyboard Flowchart Panel -->
+          <div class="ae-panel">
+            <h3>
+              <span
+                class="material-icons"
+                style="
+                  font-size: 1rem;
+                  vertical-align: middle;
+                  margin-right: 4px;
+                "
+                >account_tree</span
+              >
+              Storyboard Flow
+            </h3>
+            <p style="margin: 0 0 12px 0; font-size: 0.85rem; color: #888">
+              <a
+                href="#"
+                onclick="
+                  event.preventDefault();
+                  document.getElementById('csvFileInput').click();
+                "
+                >Load a storyboard</a
+              >,
+              <a href="#" onclick="artsEngine.loadSampleCSV(event)"
+                >sample scenes (prompts.csv)</a
+              >, or our
+              <a href="#" onclick="artsEngine.loadNodesCSV(event)"
+                >data-pipeline flow</a
+              >
+              (<a href="../../data-pipeline/admin" target="data-pipeline-admin"
+                >admin</a
+              >).
+            </p>
+            <div id="storyboardContainer"></div>
 
-        <div id="scenePromptPreview" style="display:none;margin:0 0 6px;font-size:0.82rem">
-          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-            <strong style="font-size:0.95rem">Appended to prompt:</strong>
-            <label id="selectedSceneLabel" style="display:none;align-items:center;font-size:0.85rem;color:#888;cursor:pointer">
-              <input type="checkbox" id="selectedSceneCheck" checked style="cursor:pointer;margin-right:4px"><span>Scene: <span id="selectedSceneName"></span></span>
-            </label>
-            <a id="adjustPromptLink" href="#" style="display:none;font-size:0.8rem;color:#4a90e2;text-decoration:none" onclick="artsEngine.toggleSceneUsage(event)">Adjust Prompt</a>
+            <!-- CSV upload row -->
+            <div class="ae-csv-row">
+              <label
+                class="ae-csv-btn"
+                for="csvFileInput"
+                title="Load prompts from a CSV with a 'Prompt' column. Drag &amp; drop also works."
+              >
+                <span class="material-icons" style="font-size: 1rem"
+                  >upload_file</span
+                >
+                Load CSV
+              </label>
+              <input
+                type="file"
+                id="csvFileInput"
+                accept=".csv"
+                style="display: none"
+              />
+              <span class="ae-csv-name" id="csvFileName">No file loaded</span>
+              <span style="flex: 1"></span>
+              <button
+                class="ae-csv-btn"
+                onclick="artsEngine && artsEngine.addScene()"
+                title="Add current prompt as a new scene"
+              >
+                <span class="material-icons" style="font-size: 1rem">add</span>
+                Add Scene
+              </button>
+              <button
+                class="ae-csv-btn"
+                id="clearPromptsBtn"
+                title="Clear all scenes"
+              >
+                <span class="material-icons" style="font-size: 1rem"
+                  >clear_all</span
+                >
+                Clear
+              </button>
+            </div>
+
+            <!-- Loaded prompts list (populated by JS) -->
+            <div id="promptList"></div>
           </div>
         </div>
+        <!-- /ae-left -->
 
-        <!-- Scene column usage — revealed by "Adjust Prompt" link -->
-        <div id="sceneColumnUsage" style="display:none;margin:0 0 10px;padding:10px 12px;border:1px solid rgba(74,144,226,0.25);border-radius:8px;background:rgba(74,144,226,0.04);font-size:0.82rem">
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-            <label style="display:flex;align-items:center;gap:4px;color:#888">Mode:
-              <select id="sceneMode" onchange="artsEngine.updatePromptPreview()" class="ls-select">
-                <option value="append">Append to prompt</option>
-                <option value="template">Template — use {column} in prompt</option>
-                <option value="replace">Replace prompt</option>
-              </select>
-            </label>
-            <label style="display:flex;align-items:center;gap:4px;color:#888">Format:
-              <select id="sceneFormat" onchange="artsEngine.updatePromptPreview()" class="ls-select">
-                <option value="keyval">Key: value</option>
-                <option value="bullets">Bullet list</option>
-                <option value="json">JSON</option>
-                <option value="inline">Inline</option>
-              </select>
-            </label>
-            <div style="margin-left:auto;display:flex;gap:6px">
-              <button class="ae-csv-btn" onclick="artsEngine.selectSceneCols('universal')" style="font-size:0.75rem;padding:2px 8px">Universal</button>
-              <button class="ae-csv-btn" onclick="artsEngine.selectSceneCols('all')" style="font-size:0.75rem;padding:2px 8px">All</button>
-              <button class="ae-csv-btn" onclick="artsEngine.selectSceneCols('none')" style="font-size:0.75rem;padding:2px 8px">None</button>
-            </div>
-          </div>
-          <div id="sceneColumnList"></div>
-        </div>
-
-        <pre id="scenePromptPreviewText"></pre>
-
-      </div>
-
-      <!-- Gallery Panel (revealed after first generation) -->
-      <div class="ae-panel" id="galleryPanel">
-        <h3 style="display:flex;align-items:center;justify-content:space-between">
-          <span>
-            <span class="material-icons" style="font-size:1rem;vertical-align:middle;margin-right:4px">photo_library</span>
-            Generated Output
-          </span>
-          <button id="rawToggleBtn" title="View raw API response"
-            onclick="artsEngine && artsEngine.toggleRaw()"
-            style="background:none;border:none;cursor:pointer;padding:2px 4px;color:#aaa;line-height:1">
-            <span class="material-icons" style="font-size:1.1rem;vertical-align:middle">settings</span>
-          </button>
-        </h3>
-        <div id="gallery" class="ae-gallery"></div>
-        <pre id="rawPanel" style="display:none;margin-top:14px;padding:12px;background:#f6f8fa;
-          border-radius:8px;font-size:0.75rem;overflow:auto;max-height:300px;white-space:pre-wrap;
-          word-break:break-all;color:#333"></pre>
-      </div>
-
-      <!-- Aspect Ratio Selector -->
-      <div class="ae-panel">
-        <h3>Aspect Ratio</h3>
-        <div class="ae-ratio-group">
-
-          <!-- Square 1:1 -->
-          <button class="ae-ratio-btn" data-ratio="square">
-            <div class="ratio-icon">
-              <div class="ratio-box" style="width:32px;height:32px"></div>
-            </div>
-            <span class="ratio-label">Square 1:1</span>
-          </button>
-
-          <!-- Landscape Wide 16:9 -->
-          <button class="ae-ratio-btn" data-ratio="landscape-wide">
-            <div class="ratio-icon">
-              <div class="ratio-box" style="width:48px;height:27px"></div>
-            </div>
-            <span class="ratio-label">Wide 16:9</span>
-          </button>
-
-          <!-- Landscape 4:3 -->
-          <button class="ae-ratio-btn" data-ratio="landscape">
-            <div class="ratio-icon">
-              <div class="ratio-box" style="width:40px;height:30px"></div>
-            </div>
-            <span class="ratio-label">Landscape 4:3</span>
-          </button>
-
-          <!-- Portrait Tall 9:16 -->
-          <button class="ae-ratio-btn" data-ratio="portrait-tall">
-            <div class="ratio-icon">
-              <div class="ratio-box" style="width:18px;height:32px"></div>
-            </div>
-            <span class="ratio-label">Tall 9:16</span>
-          </button>
-
-          <!-- Portrait 3:4 -->
-          <button class="ae-ratio-btn" data-ratio="portrait">
-            <div class="ratio-icon">
-              <div class="ratio-box" style="width:24px;height:32px"></div>
-            </div>
-            <span class="ratio-label">Portrait 3:4</span>
-          </button>
-
-        </div>
-      </div>
-
-      <!-- Storyboard Flowchart Panel -->
-      <div class="ae-panel">
-        <h3>
-          <span class="material-icons" style="font-size:1rem;vertical-align:middle;margin-right:4px">account_tree</span>
-          Storyboard Flow
-        </h3>
-        <p style="margin:0 0 12px 0;font-size:0.85rem;color:#888">
-          <a href="#" onclick="event.preventDefault();document.getElementById('csvFileInput').click()">Load a storyboard</a>, <a href="#" onclick="artsEngine.loadSampleCSV(event)">sample scenes (prompts.csv)</a>, or our <a href="#" onclick="artsEngine.loadNodesCSV(event)">data-pipeline flow</a> (<a href="../../data-pipeline/admin" target="data-pipeline-admin">admin</a>).
-        </p>
-        <div id="storyboardContainer"></div>
-
-        <!-- CSV upload row -->
-        <div class="ae-csv-row">
-          <label class="ae-csv-btn" for="csvFileInput"
-            title="Load prompts from a CSV with a 'Prompt' column. Drag &amp; drop also works.">
-            <span class="material-icons" style="font-size:1rem">upload_file</span>
-            Load CSV
-          </label>
-          <input type="file" id="csvFileInput" accept=".csv" style="display:none">
-          <span class="ae-csv-name" id="csvFileName">No file loaded</span>
-          <span style="flex:1"></span>
-          <button class="ae-csv-btn" onclick="artsEngine && artsEngine.addScene()"
-            title="Add current prompt as a new scene">
-            <span class="material-icons" style="font-size:1rem">add</span>
-            Add Scene
-          </button>
-          <button class="ae-csv-btn" id="clearPromptsBtn" title="Clear all scenes">
-            <span class="material-icons" style="font-size:1rem">clear_all</span>
-            Clear
-          </button>
-        </div>
-
-        <!-- Loaded prompts list (populated by JS) -->
-        <div id="promptList"></div>
-      </div>
-
-    </div><!-- /ae-left -->
-
-    <!-- =================================================================
+        <!-- =================================================================
          RIGHT COLUMN — GitHub Token Widget + Settings
          ================================================================= -->
-    <div class="ae-right">
-
-      <!-- GitHub Token Widget (projects/js/issues.js) -->
-      <div class="ae-panel">
-        <h3>
-          <span class="material-icons" style="font-size:1rem;vertical-align:middle;margin-right:4px">hub</span>
-          GitHub Output
-        </h3>
-        <p style="margin:0 0 10px 0;font-size:0.83rem;color:#888">
-          Enter your GitHub token to save your generated&nbsp;content
-        </p>
-        <!--
+        <div class="ae-right">
+          <!-- GitHub Token Widget (projects/js/issues.js) -->
+          <div class="ae-panel">
+            <h3>
+              <span
+                class="material-icons"
+                style="
+                  font-size: 1rem;
+                  vertical-align: middle;
+                  margin-right: 4px;
+                "
+                >hub</span
+              >
+              GitHub Output
+            </h3>
+            <p style="margin: 0 0 10px 0; font-size: 0.83rem; color: #888">
+              Enter your GitHub token to save your generated&nbsp;content
+            </p>
+            <!--
           Arts Engine / GitHub Token Widget
           Token saved in localStorage as 'github_token'
           Widget title can be set via JS config; showProject:false for minimal view
         -->
-        <div id="issues-root"></div>
+            <div id="issues-root"></div>
 
-        <!-- Save button revealed after generation -->
-        <button id="saveGithubBtn" style="width:100%;margin-top:10px;
-          padding:10px;background:#2da44e;color:#fff;border:none;border-radius:8px;
-          font-size:0.9rem;font-weight:600;cursor:pointer;align-items:center;
-          justify-content:center;gap:6px">
-          <span class="material-icons" style="font-size:1rem">upload</span>
-          Save to GitHub
+            <!-- Save button revealed after generation -->
+            <button
+              id="saveGithubBtn"
+              style="
+                width: 100%;
+                margin-top: 10px;
+                padding: 10px;
+                background: #2da44e;
+                color: #fff;
+                border: none;
+                border-radius: 8px;
+                font-size: 0.9rem;
+                font-weight: 600;
+                cursor: pointer;
+                align-items: center;
+                justify-content: center;
+                gap: 6px;
+              "
+            >
+              <span class="material-icons" style="font-size: 1rem">upload</span>
+              Save to GitHub
+            </button>
+          </div>
+
+          <!-- Resource Area Selector — powered by @shared/github-components -->
+          <div class="ae-panel" id="resourceAreaPanel">
+            <h3>
+              <span
+                class="material-icons"
+                style="
+                  font-size: 1rem;
+                  vertical-align: middle;
+                  margin-right: 4px;
+                "
+                >folder_special</span
+              >
+              Resource Areas
+            </h3>
+            <p style="margin: 0 0 10px 0; font-size: 0.83rem; color: #888">
+              Select GitHub repositories or documentation collections to use as
+              context.
+            </p>
+
+            <!-- Filter dropdown — shown once repos are loaded -->
+            <div id="resourceSelectorMount" style="margin-bottom: 10px"></div>
+
+            <button
+              id="openRepoModalBtn"
+              style="
+                width: 100%;
+                padding: 8px 12px;
+                background: #4a90e2;
+                color: #fff;
+                border: none;
+                border-radius: 8px;
+                font-size: 0.85rem;
+                font-weight: 600;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 6px;
+              "
+            >
+              <span class="material-icons" style="font-size: 1rem"
+                >add_circle_outline</span
+              >
+              Choose Resource Areas
+            </button>
+          </div>
+
+          <!-- API Reference -->
+          <div class="ae-panel" style="font-size: 0.83rem">
+            <h3>
+              <span
+                class="material-icons"
+                style="
+                  font-size: 1rem;
+                  vertical-align: middle;
+                  margin-right: 4px;
+                "
+                >info</span
+              >
+              API Reference
+            </h3>
+            <ul
+              style="
+                margin: 0;
+                margin-bottom: 10px;
+                padding-left: 16px;
+                color: #888;
+                line-height: 1.9;
+              "
+            >
+              <li><a href="../">About Our Engine</a></li>
+              <li>
+                <a
+                  href="https://modelcontextprotocol.io/extensions/apps/build"
+                  target="_blank"
+                  >Model Context Protocol</a
+                >
+              </li>
+              <li>
+                <a
+                  href="https://github.com/modelcontextprotocol/servers"
+                  target="_blank"
+                  >Official MCP Server Integrations</a
+                >
+              </li>
+              <li>
+                <a
+                  href="https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop"
+                  target="_blank"
+                  >Claude Desktop Local MCP Servers</a
+                >
+              </li>
+              <li>
+                <a href="https://docs.x.ai/docs" target="_blank"
+                  >Documentation for xAI API</a
+                >
+              </li>
+              <li>
+                <a
+                  href="https://docs.rs/api_xai/latest/api_xai/"
+                  target="_blank"
+                  >Rust Crate api_xai</a
+                >
+              </li>
+            </ul>
+          </div>
+        </div>
+        <!-- /ae-right -->
+      </div>
+      <!-- /ae-container -->
+
+      <script
+        type="text/javascript"
+        src="../../localsite/js/embed.js?map=airports&showindex=1&showheader=true"
+      ></script>
+      <div id="listwidget"></div>
+
+      <p
+        style="
+          margin: 20px 0;
+          text-align: center;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+        "
+      >
+        <button
+          id="authInfoIcon"
+          class="icon-circle-btn"
+          type="button"
+          aria-label="About Our Engine"
+          onclick="window.location.href = '../'"
+        >
+          i
         </button>
-      </div>
+        <a href="../">About Our Engine</a>
+      </p>
+    </div>
+    <!-- /content -->
 
+    <!-- Lightbox overlay (full-screen image view, Escape or click outside to close) -->
+    <div class="ae-lightbox" id="aeLightbox">
+      <span
+        class="ae-lightbox-close material-icons"
+        onclick="artsEngine && artsEngine.closeLightbox()"
+        >close</span
+      >
+      <img id="aeLightboxImg" src="" alt="Generated image" />
+    </div>
 
+    <script type="text/javascript" src="/chat/keys/providers.js"></script>
+    <script type="text/javascript" src="/chat/keys/key-manager.js"></script>
+    <script>
+      if (window.KeyManager)
+        window.KeyManager.initCrypto().catch(function () {});
+    </script>
+    <script type="text/javascript" src="js/app.js"></script>
+    <script type="text/javascript" src="js/node-canvas.js"></script>
 
-      <!-- Resource Area Selector — powered by @shared/github-components -->
-      <div class="ae-panel" id="resourceAreaPanel">
-        <h3>
-          <span class="material-icons" style="font-size:1rem;vertical-align:middle;margin-right:4px">folder_special</span>
-          Resource Areas
-        </h3>
-        <p style="margin:0 0 10px 0;font-size:0.83rem;color:#888">
-          Select GitHub repositories or documentation collections to use as context.
-        </p>
+    <!-- GitHub Repo Modal (Web Component) — opened by "Choose Resource Areas" button -->
+    <github-repo-modal id="repoModal"></github-repo-modal>
 
-        <!-- Filter dropdown — shown once repos are loaded -->
-        <div id="resourceSelectorMount" style="margin-bottom:10px"></div>
+    <script>
+      // ── Resource Area integration ─────────────────────────────────────────────
+      // Waits for the Web Components bundle to register the custom elements before
+      // wiring up the modal and the filter dropdown.  Falls back silently if the
+      // bundle is not yet loaded (e.g., when served without the packages/ dir).
+      (function initResourceAreas() {
+        var STORAGE_KEY = "ae_github_pat";
+        var REPOS_KEY = "ae_selected_repos";
 
-        <button id="openRepoModalBtn"
-          style="width:100%;padding:8px 12px;background:#4a90e2;color:#fff;border:none;
-                 border-radius:8px;font-size:0.85rem;font-weight:600;cursor:pointer;
-                 display:flex;align-items:center;justify-content:center;gap:6px">
-          <span class="material-icons" style="font-size:1rem">add_circle_outline</span>
-          Choose Resource Areas
-        </button>
-      </div>
-
-      <!-- API Reference -->
-      <div class="ae-panel" style="font-size:0.83rem">
-        <h3>
-          <span class="material-icons" style="font-size:1rem;vertical-align:middle;margin-right:4px">info</span>
-          API Reference
-        </h3>
-        <ul style="margin:0;margin-bottom:10px;padding-left:16px;color:#888;line-height:1.9">
-          <li><a href="../">About Our Engine</a></li>
-          <li><a href="https://modelcontextprotocol.io/extensions/apps/build" target="_blank">Model Context Protocol</a></li>
-          <li><a href="https://github.com/modelcontextprotocol/servers" target="_blank">Official MCP Server Integrations</a></li>
-          <li><a href="https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop" target="_blank">Claude Desktop Local MCP Servers</a></li>
-          <li><a href="https://docs.x.ai/docs" target="_blank">Documentation for xAI API</a></li>
-          <li><a href="https://docs.rs/api_xai/latest/api_xai/" target="_blank">Rust Crate api_xai</a></li>
-        </ul>
-
-      </div>
-
-    </div><!-- /ae-right -->
-
-  </div><!-- /ae-container -->
-
-
-  <script type="text/javascript" src="../../localsite/js/embed.js?map=airports&showindex=1&showheader=true"></script>
-  <div id="listwidget"></div>
-
-  <p style="margin:20px 0;text-align:center;display:flex;align-items:center;justify-content:center;gap:8px">
-    <button id="authInfoIcon" class="icon-circle-btn" type="button" aria-label="About Our Engine" onclick="window.location.href='../'">i</button>
-    <a href="../">About Our Engine</a>
-  </p>
-</div><!-- /content -->
-
-<!-- Lightbox overlay (full-screen image view, Escape or click outside to close) -->
-<div class="ae-lightbox" id="aeLightbox">
-  <span class="ae-lightbox-close material-icons"
-    onclick="artsEngine && artsEngine.closeLightbox()">close</span>
-  <img id="aeLightboxImg" src="" alt="Generated image">
-</div>
-
-<script type="text/javascript" src="/chat/keys/providers.js"></script>
-<script type="text/javascript" src="/chat/keys/key-manager.js"></script>
-<script>if (window.KeyManager) window.KeyManager.initCrypto().catch(function () {});</script>
-<script type="text/javascript" src="js/app.js"></script>
-
-<!-- GitHub Repo Modal (Web Component) — opened by "Choose Resource Areas" button -->
-<github-repo-modal id="repoModal"></github-repo-modal>
-
-<script>
-// ── Resource Area integration ─────────────────────────────────────────────
-// Waits for the Web Components bundle to register the custom elements before
-// wiring up the modal and the filter dropdown.  Falls back silently if the
-// bundle is not yet loaded (e.g., when served without the packages/ dir).
-(function initResourceAreas() {
-  var STORAGE_KEY = 'ae_github_pat';
-  var REPOS_KEY   = 'ae_selected_repos';
-
-  function getStoredPAT() {
-    // Reuse the GitHub PAT that issues.js / agents.js may have stored, or
-    // fall back to our own storage key.
-    try {
-      var aProRaw = localStorage.getItem('aPro');
-      if (aProRaw) {
-        var aPro = JSON.parse(aProRaw);
-        if (aPro.GitHub) return aPro.GitHub;
-      }
-    } catch (_) {}
-    return localStorage.getItem(STORAGE_KEY) || '';
-  }
-
-  function getStoredRepos() {
-    try { return JSON.parse(localStorage.getItem(REPOS_KEY) || '[]'); } catch (_) { return []; }
-  }
-
-  function saveRepos(repos) {
-    localStorage.setItem(REPOS_KEY, JSON.stringify(repos));
-  }
-
-  function mountSelector(availableRepos, selectedRepos) {
-    var mount = document.getElementById('resourceSelectorMount');
-    if (!mount) return;
-
-    // Remove old element if re-mounting
-    var old = mount.querySelector('resource-area-selector');
-    if (old) mount.removeChild(old);
-
-    if (!availableRepos.length) {
-      mount.innerHTML = '<span style="font-size:0.8rem;color:#aaa">No repos selected yet.</span>';
-      return;
-    }
-
-    var el = document.createElement('resource-area-selector');
-    el.availableRepos = availableRepos;
-    el.selectedRepos  = selectedRepos;
-    el.addEventListener('selection-change', function(e) {
-      saveRepos(e.detail);
-      // Expose current selection for app.js to use if needed
-      window.AE_SELECTED_AREAS = e.detail;
-    });
-    mount.innerHTML = '';
-    mount.appendChild(el);
-    window.AE_SELECTED_AREAS = selectedRepos;
-  }
-
-  function initModal() {
-    var modal  = document.getElementById('repoModal');
-    var btn    = document.getElementById('openRepoModalBtn');
-    if (!modal || !btn) return;
-
-    var pat    = getStoredPAT();
-    var repos  = getStoredRepos();
-
-    modal.setAttribute('github-pat', pat);
-    modal.setAttribute('selected-repos', JSON.stringify(repos));
-
-    btn.addEventListener('click', function() {
-      // Refresh PAT in case the user just entered it in the Agents panel
-      modal.setAttribute('github-pat', getStoredPAT());
-      modal.open();
-    });
-
-    modal.addEventListener('repos-change', function(e) {
-      var names = (e.detail || []).map(function(r) { return r.full_name; });
-      saveRepos(names);
-      mountSelector(names, names);
-      window.AE_SELECTED_AREAS = names;
-    });
-
-    modal.addEventListener('modal-close', function() {
-      // Re-read stored repos after modal closes to refresh selector
-      var stored = getStoredRepos();
-      mountSelector(stored, stored);
-    });
-
-    // Initial mount
-    var storedNames = repos.length ? repos : [];
-    mountSelector(storedNames, storedNames);
-  }
-
-  // Custom elements are registered asynchronously (bundle is `defer`-loaded).
-  // Poll with customElements.whenDefined for a clean handoff.
-  if (typeof customElements !== 'undefined' && customElements.whenDefined) {
-    Promise.all([
-      customElements.whenDefined('resource-area-selector'),
-      customElements.whenDefined('github-repo-modal')
-    ]).then(initModal).catch(function(err) {
-      console.warn('[ResourceAreas] Web Components not available:', err);
-    });
-  }
-})();
-</script>
-
-<script>
-function toggleSettingsContainer(event) {
-  event.preventDefault();
-  const c = document.getElementById('settingsContainer');
-  const btn = document.getElementById('toggleSettingsBtn');
-  if (!c) return;
-  const open = c.style.display === 'none';
-  c.style.display = open ? '' : 'none';
-  if (btn) btn.style.color = open ? '#4a90e2' : '#888';
-}
-
-// Sync backend URL input with config.yaml api_base once loaded
-document.addEventListener('DOMContentLoaded', function () {
-  // Small delay to let the async config fetch settle
-  setTimeout(function () {
-    const input = document.getElementById('apiBaseInput');
-    if (input && window.AE_API_BASE) input.value = window.AE_API_BASE;
-  }, 300);
-
-  function loadStylesheetOnce(href, id) {
-    return new Promise(function(resolve, reject) {
-      if (document.getElementById(id)) {
-        resolve();
-        return;
-      }
-      const link = document.createElement('link');
-      link.id = id;
-      link.rel = 'stylesheet';
-      link.href = href;
-      link.onload = resolve;
-      link.onerror = reject;
-      document.head.appendChild(link);
-    });
-  }
-
-  function loadScriptOnce(src, id) {
-    return new Promise(function(resolve, reject) {
-      const existing = document.getElementById(id);
-      if (existing) {
-        if (existing.dataset.loaded === 'true') {
-          resolve();
-        } else {
-          existing.addEventListener('load', resolve, { once: true });
-          existing.addEventListener('error', reject, { once: true });
+        function getStoredPAT() {
+          // Reuse the GitHub PAT that issues.js / agents.js may have stored, or
+          // fall back to our own storage key.
+          try {
+            var aProRaw = localStorage.getItem("aPro");
+            if (aProRaw) {
+              var aPro = JSON.parse(aProRaw);
+              if (aPro.GitHub) return aPro.GitHub;
+            }
+          } catch (_) {}
+          return localStorage.getItem(STORAGE_KEY) || "";
         }
-        return;
-      }
-      const script = document.createElement('script');
-      script.id = id;
-      script.src = src;
-      script.async = true;
-      script.addEventListener('load', function() {
-        script.dataset.loaded = 'true';
-        resolve();
-      }, { once: true });
-      script.addEventListener('error', reject, { once: true });
-      document.head.appendChild(script);
-    });
-  }
 
-  let agentsAssetsPromise = null;
-  function ensureAgentsAssets() {
-    if (!agentsAssetsPromise) {
-      agentsAssetsPromise = Promise.all([
-        loadStylesheetOnce('/chat/keys/style.css', 'kmStylesheet'),
-      ]);
-    }
-    return agentsAssetsPromise;
-  }
+        function getStoredRepos() {
+          try {
+            return JSON.parse(localStorage.getItem(REPOS_KEY) || "[]");
+          } catch (_) {
+            return [];
+          }
+        }
 
-  const toggleAgentsEditor = document.getElementById('toggleAgentsEditor');
-  const agentsContainer = document.getElementById('agentsContainer');
+        function saveRepos(repos) {
+          localStorage.setItem(REPOS_KEY, JSON.stringify(repos));
+        }
 
-  function isAgentsOpen() {
-    return agentsContainer && getComputedStyle(agentsContainer).display !== 'none';
-  }
+        function mountSelector(availableRepos, selectedRepos) {
+          var mount = document.getElementById("resourceSelectorMount");
+          if (!mount) return;
 
-  function isAgentsPopulated() {
-    if (!agentsContainer) {
-      return false;
-    }
-    return agentsContainer.children.length > 0 || agentsContainer.textContent.trim().length > 0;
-  }
+          // Remove old element if re-mounting
+          var old = mount.querySelector("resource-area-selector");
+          if (old) mount.removeChild(old);
 
-  function setAgentsState(open) {
-    if (!agentsContainer || !toggleAgentsEditor) {
-      return;
-    }
-    agentsContainer.style.display = open ? '' : 'none';
-    toggleAgentsEditor.style.display = open ? 'none' : '';
-  }
+          if (!availableRepos.length) {
+            mount.innerHTML =
+              '<span style="font-size:0.8rem;color:#aaa">No repos selected yet.</span>';
+            return;
+          }
 
-  if (toggleAgentsEditor && agentsContainer) {
-    toggleAgentsEditor.addEventListener('click', function(event) {
-      event.preventDefault();
-
-      if (isAgentsOpen()) {
-        setAgentsState(false);
-        return;
-      }
-
-      if (isAgentsPopulated()) {
-        setAgentsState(true);
-        return;
-      }
-
-      toggleAgentsEditor.style.display = 'none';
-      ensureAgentsAssets()
-        .then(function() {
-          KeyManager.migrateFromLegacy();
-          KeyManager.init(agentsContainer, {
-            serverKeysUrl: (window.AE_API_BASE || 'http://localhost:8082') + '/api/server-keys'
+          var el = document.createElement("resource-area-selector");
+          el.availableRepos = availableRepos;
+          el.selectedRepos = selectedRepos;
+          el.addEventListener("selection-change", function (e) {
+            saveRepos(e.detail);
+            // Expose current selection for app.js to use if needed
+            window.AE_SELECTED_AREAS = e.detail;
           });
-          setAgentsState(true);
-        })
-        .catch(function(error) {
-          console.error('Failed to load key manager assets', error);
-          setAgentsState(false);
-        });
-    });
-  }
-});
-</script>
+          mount.innerHTML = "";
+          mount.appendChild(el);
+          window.AE_SELECTED_AREAS = selectedRepos;
+        }
 
-</body>
+        function initModal() {
+          var modal = document.getElementById("repoModal");
+          var btn = document.getElementById("openRepoModalBtn");
+          if (!modal || !btn) return;
+
+          var pat = getStoredPAT();
+          var repos = getStoredRepos();
+
+          modal.setAttribute("github-pat", pat);
+          modal.setAttribute("selected-repos", JSON.stringify(repos));
+
+          btn.addEventListener("click", function () {
+            // Refresh PAT in case the user just entered it in the Agents panel
+            modal.setAttribute("github-pat", getStoredPAT());
+            modal.open();
+          });
+
+          modal.addEventListener("repos-change", function (e) {
+            var names = (e.detail || []).map(function (r) {
+              return r.full_name;
+            });
+            saveRepos(names);
+            mountSelector(names, names);
+            window.AE_SELECTED_AREAS = names;
+          });
+
+          modal.addEventListener("modal-close", function () {
+            // Re-read stored repos after modal closes to refresh selector
+            var stored = getStoredRepos();
+            mountSelector(stored, stored);
+          });
+
+          // Initial mount
+          var storedNames = repos.length ? repos : [];
+          mountSelector(storedNames, storedNames);
+        }
+
+        // Custom elements are registered asynchronously (bundle is `defer`-loaded).
+        // Poll with customElements.whenDefined for a clean handoff.
+        if (
+          typeof customElements !== "undefined" &&
+          customElements.whenDefined
+        ) {
+          Promise.all([
+            customElements.whenDefined("resource-area-selector"),
+            customElements.whenDefined("github-repo-modal"),
+          ])
+            .then(initModal)
+            .catch(function (err) {
+              console.warn(
+                "[ResourceAreas] Web Components not available:",
+                err,
+              );
+            });
+        }
+      })();
+    </script>
+
+    <script>
+      function toggleSettingsContainer(event) {
+        event.preventDefault();
+        const c = document.getElementById("settingsContainer");
+        const btn = document.getElementById("toggleSettingsBtn");
+        if (!c) return;
+        const open = c.style.display === "none";
+        c.style.display = open ? "" : "none";
+        if (btn) btn.style.color = open ? "#4a90e2" : "#888";
+      }
+
+      // Sync backend URL input with config.yaml api_base once loaded
+      document.addEventListener("DOMContentLoaded", function () {
+        // Small delay to let the async config fetch settle
+        setTimeout(function () {
+          const input = document.getElementById("apiBaseInput");
+          if (input && window.AE_API_BASE) input.value = window.AE_API_BASE;
+        }, 300);
+
+        function loadStylesheetOnce(href, id) {
+          return new Promise(function (resolve, reject) {
+            if (document.getElementById(id)) {
+              resolve();
+              return;
+            }
+            const link = document.createElement("link");
+            link.id = id;
+            link.rel = "stylesheet";
+            link.href = href;
+            link.onload = resolve;
+            link.onerror = reject;
+            document.head.appendChild(link);
+          });
+        }
+
+        function loadScriptOnce(src, id) {
+          return new Promise(function (resolve, reject) {
+            const existing = document.getElementById(id);
+            if (existing) {
+              if (existing.dataset.loaded === "true") {
+                resolve();
+              } else {
+                existing.addEventListener("load", resolve, { once: true });
+                existing.addEventListener("error", reject, { once: true });
+              }
+              return;
+            }
+            const script = document.createElement("script");
+            script.id = id;
+            script.src = src;
+            script.async = true;
+            script.addEventListener(
+              "load",
+              function () {
+                script.dataset.loaded = "true";
+                resolve();
+              },
+              { once: true },
+            );
+            script.addEventListener("error", reject, { once: true });
+            document.head.appendChild(script);
+          });
+        }
+
+        let agentsAssetsPromise = null;
+        function ensureAgentsAssets() {
+          if (!agentsAssetsPromise) {
+            agentsAssetsPromise = Promise.all([
+              loadStylesheetOnce("/chat/keys/style.css", "kmStylesheet"),
+            ]);
+          }
+          return agentsAssetsPromise;
+        }
+
+        const toggleAgentsEditor =
+          document.getElementById("toggleAgentsEditor");
+        const agentsContainer = document.getElementById("agentsContainer");
+
+        function isAgentsOpen() {
+          return (
+            agentsContainer &&
+            getComputedStyle(agentsContainer).display !== "none"
+          );
+        }
+
+        function isAgentsPopulated() {
+          if (!agentsContainer) {
+            return false;
+          }
+          return (
+            agentsContainer.children.length > 0 ||
+            agentsContainer.textContent.trim().length > 0
+          );
+        }
+
+        function setAgentsState(open) {
+          if (!agentsContainer || !toggleAgentsEditor) {
+            return;
+          }
+          agentsContainer.style.display = open ? "" : "none";
+          toggleAgentsEditor.style.display = open ? "none" : "";
+        }
+
+        if (toggleAgentsEditor && agentsContainer) {
+          toggleAgentsEditor.addEventListener("click", function (event) {
+            event.preventDefault();
+
+            if (isAgentsOpen()) {
+              setAgentsState(false);
+              return;
+            }
+
+            if (isAgentsPopulated()) {
+              setAgentsState(true);
+              return;
+            }
+
+            toggleAgentsEditor.style.display = "none";
+            ensureAgentsAssets()
+              .then(function () {
+                KeyManager.migrateFromLegacy();
+                KeyManager.init(agentsContainer, {
+                  serverKeysUrl:
+                    (window.AE_API_BASE || "http://localhost:8082") +
+                    "/api/server-keys",
+                });
+                setAgentsState(true);
+              })
+              .catch(function (error) {
+                console.error("Failed to load key manager assets", error);
+                setAgentsState(false);
+              });
+          });
+        }
+      });
+    </script>
+  </body>
 </html>

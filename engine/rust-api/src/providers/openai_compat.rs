@@ -69,6 +69,110 @@ impl OpenAICompatProvider {
             _ => "1024x1024",
         }
     }
+
+    /// Pull image URLs / base64 out of an OpenAI-style `{ "data": [...] }` body.
+    fn extract_image_urls(raw: &Value) -> Vec<String> {
+        raw["data"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| {
+                        item["url"].as_str().map(ToString::to_string).or_else(|| {
+                            item["b64_json"]
+                                .as_str()
+                                .map(|b| format!("data:image/png;base64,{b}"))
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Resolve an image reference to (mime, bytes). Accepts `data:` URLs
+    /// (uploads / prior outputs from this app) and public http(s) URLs.
+    async fn decode_image(&self, src: &str) -> anyhow::Result<(String, Vec<u8>)> {
+        if let Some(rest) = src.strip_prefix("data:") {
+            let (meta, data) = rest
+                .split_once(',')
+                .ok_or_else(|| anyhow::anyhow!("malformed data URL"))?;
+            let mime = meta.split(';').next().unwrap_or("image/png").to_string();
+            if !meta.contains("base64") {
+                anyhow::bail!("only base64 data URLs are supported for image input");
+            }
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(data.trim())
+                .map_err(|e| anyhow::anyhow!("invalid base64 image: {e}"))?;
+            Ok((mime, bytes))
+        } else {
+            let resp = self.http_client.get(src).send().await?;
+            let mime = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("image/png")
+                .to_string();
+            let bytes = resp.bytes().await?.to_vec();
+            Ok((mime, bytes))
+        }
+    }
+
+    /// Image-to-image / editing via the OpenAI-compatible `/v1/images/edits`
+    /// endpoint (multipart). Used by services that support it — e.g. Pollinations
+    /// FLUX.2 (klein), OpenAI gpt-image-1. The input image(s) are sent as file
+    /// parts so `data:` URLs work without a public-hosting step.
+    async fn generate_image_edit(
+        &self,
+        request: &ImageGenerationRequest,
+        model: &str,
+        images: &[String],
+    ) -> anyhow::Result<GenerationResponse> {
+        let url = format!("{}/v1/images/edits", self.base_url);
+        let size = Self::aspect_to_size(request.aspect_ratio.as_deref().unwrap_or("1:1"));
+
+        let mut form = reqwest::multipart::Form::new()
+            .text("model", model.to_string())
+            .text("prompt", request.prompt.clone())
+            .text("size", size.to_string())
+            .text(
+                "response_format",
+                request.response_format.clone().unwrap_or_else(|| "url".to_string()),
+            );
+
+        for (i, img) in images.iter().enumerate() {
+            let (mime, bytes) = self.decode_image(img).await?;
+            let ext = mime.rsplit('/').next().unwrap_or("png");
+            let part = reqwest::multipart::Part::bytes(bytes)
+                .file_name(format!("image_{i}.{ext}"))
+                .mime_str(&mime)?;
+            form = form.part("image", part);
+        }
+
+        let resp = self
+            .http_client
+            .post(&url)
+            .bearer_auth(&self.api_key)
+            .multipart(form)
+            .send()
+            .await?;
+        let status = resp.status();
+        let raw: Value = resp.json().await.unwrap_or_else(|_| json!({}));
+        if !status.is_success() {
+            anyhow::bail!("{} image edit error ({}): {}", self.name, status, raw);
+        }
+
+        let media_urls = Self::extract_image_urls(&raw);
+        Ok(GenerationResponse {
+            provider: self.name.clone(),
+            model: model.to_string(),
+            status: if media_urls.is_empty() { "failed" } else { "completed" }.to_string(),
+            id: None,
+            text: None,
+            usage: None,
+            media_urls,
+            raw,
+        })
+    }
 }
 
 #[async_trait]
@@ -161,6 +265,14 @@ impl GenerativeModel for OpenAICompatProvider {
             None => anyhow::bail!("{}: no image model configured", self.name),
         };
 
+        // Image-to-image / editing when reference image(s) are supplied — routes
+        // to the multipart `/v1/images/edits` endpoint instead of text-to-image.
+        if let Some(images) = request.image_urls.as_deref() {
+            if !images.is_empty() {
+                return self.generate_image_edit(&request, &model, images).await;
+            }
+        }
+
         let size = Self::aspect_to_size(request.aspect_ratio.as_deref().unwrap_or("1:1"));
         let body = json!({
             "model": model,
@@ -172,20 +284,7 @@ impl GenerativeModel for OpenAICompatProvider {
 
         let raw = self.post("/v1/images/generations", body).await?;
 
-        let media_urls: Vec<String> = raw["data"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|item| {
-                        item["url"].as_str().map(ToString::to_string).or_else(|| {
-                            item["b64_json"]
-                                .as_str()
-                                .map(|b| format!("data:image/png;base64,{b}"))
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let media_urls = Self::extract_image_urls(&raw);
 
         Ok(GenerationResponse {
             provider: self.name.clone(),

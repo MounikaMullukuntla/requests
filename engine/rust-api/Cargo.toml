@@ -8,8 +8,9 @@ anyhow = "1.0"
 api_xai = { version = "0.3.0", default-features = false, features = ["enabled", "integration"] }
 async-trait = "0.1"
 axum = "0.8"
+base64 = "0.22"
 dotenvy = "0.15"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread"] }

@@ -12,6 +12,7 @@ pub struct GeminiProvider {
     http_client: reqwest::Client,
     text_model: String,
     image_model: String,
+    image_edit_model: String,
 }
 
 impl GeminiProvider {
@@ -22,7 +23,10 @@ impl GeminiProvider {
             api_key,
             http_client: reqwest::Client::new(),
             text_model: "gemini-1.5-flash".to_string(),
-            image_model: "imagen-3.0-generate-002".to_string(),
+            image_model: "imagen-4.0-generate-001".to_string(),
+            // Multimodal model that accepts image input and returns images
+            // ("Nano Banana") — used for img2img / editing via :generateContent.
+            image_edit_model: "gemini-2.5-flash-image".to_string(),
         }
     }
 
@@ -40,6 +44,103 @@ impl GeminiProvider {
             anyhow::bail!("Gemini API error ({}) {}: {}", status, public_url, body);
         }
         Ok(body)
+    }
+
+    /// Resolve an image reference to (mime, base64-data). Accepts `data:` URLs
+    /// (uploads / prior outputs from this app) and public http(s) URLs. Gemini's
+    /// `:generateContent` wants images as inline base64, so http(s) refs are
+    /// fetched and re-encoded.
+    async fn decode_image_b64(&self, src: &str) -> anyhow::Result<(String, String)> {
+        use base64::Engine;
+        let engine = base64::engine::general_purpose::STANDARD;
+        if let Some(rest) = src.strip_prefix("data:") {
+            let (meta, data) = rest
+                .split_once(',')
+                .ok_or_else(|| anyhow::anyhow!("malformed data URL"))?;
+            let mime = meta.split(';').next().unwrap_or("image/png").to_string();
+            if !meta.contains("base64") {
+                anyhow::bail!("only base64 data URLs are supported for image input");
+            }
+            // Re-encode after a decode round-trip to normalize whitespace/padding.
+            let bytes = engine
+                .decode(data.trim())
+                .map_err(|e| anyhow::anyhow!("invalid base64 image: {e}"))?;
+            Ok((mime, engine.encode(bytes)))
+        } else {
+            let resp = self.http_client.get(src).send().await?;
+            let mime = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("image/png")
+                .to_string();
+            let bytes = resp.bytes().await?.to_vec();
+            Ok((mime, engine.encode(bytes)))
+        }
+    }
+
+    /// Image-to-image / editing via the multimodal `:generateContent` endpoint.
+    /// The reference image(s) ride along as inline base64 parts next to the text
+    /// prompt; the model returns an edited image in the response parts.
+    async fn generate_image_edit(
+        &self,
+        request: &ImageGenerationRequest,
+        images: &[String],
+    ) -> anyhow::Result<GenerationResponse> {
+        // Always the multimodal image-output model — the registry's Google model
+        // ids (e.g. gemini-2.0-flash) can't emit images, so we don't trust a
+        // passed id here, mirroring the Imagen text-to-image path above.
+        let model = &self.image_edit_model;
+        let url = format!(
+            "{}/models/{}:generateContent?key={}",
+            Self::BASE_URL,
+            model,
+            self.api_key
+        );
+
+        let mut parts = vec![json!({ "text": request.prompt })];
+        for img in images {
+            let (mime, data) = self.decode_image_b64(img).await?;
+            parts.push(json!({ "inline_data": { "mime_type": mime, "data": data } }));
+        }
+
+        let payload = json!({
+            "contents": [{ "parts": parts }],
+            "generationConfig": { "responseModalities": ["IMAGE"] }
+        });
+
+        let raw = self.post_json(&url, payload).await?;
+
+        // Returned image(s) live in candidates[].content.parts[].inlineData.
+        let media_urls: Vec<String> = raw["candidates"]
+            .as_array()
+            .map(|cands| {
+                cands
+                    .iter()
+                    .flat_map(|c| c["content"]["parts"].as_array().cloned().unwrap_or_default())
+                    .filter_map(|part| {
+                        let inline = part.get("inlineData").or_else(|| part.get("inline_data"))?;
+                        let b64 = inline["data"].as_str()?;
+                        let mime = inline["mimeType"]
+                            .as_str()
+                            .or_else(|| inline["mime_type"].as_str())
+                            .unwrap_or("image/png");
+                        Some(format!("data:{};base64,{}", mime, b64))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(GenerationResponse {
+            provider: "google".to_string(),
+            model: model.to_string(),
+            status: if media_urls.is_empty() { "failed" } else { "completed" }.to_string(),
+            id: None,
+            text: None,
+            usage: None,
+            media_urls,
+            raw,
+        })
     }
 }
 
@@ -123,6 +224,14 @@ impl GenerativeModel for GeminiProvider {
         &self,
         request: ImageGenerationRequest,
     ) -> anyhow::Result<GenerationResponse> {
+        // Img2img / editing when reference image(s) are supplied — routes to the
+        // multimodal :generateContent endpoint instead of Imagen text-to-image.
+        if let Some(images) = request.image_urls.as_deref() {
+            if !images.is_empty() {
+                return self.generate_image_edit(&request, images).await;
+            }
+        }
+
         let url = format!(
             "{}/models/{}:predict?key={}",
             Self::BASE_URL,
