@@ -1,0 +1,160 @@
+/* ===========================================================================
+   Node Canvas — Flora-style typed-node creative flow.
+   Separate node types (Text · Image · Generate) wired by typed ports.
+   Mounted into #nodeCanvasMount in engine/index.html.
+   =========================================================================== */
+
+.nc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.nc-toolbar .nc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  font-size: 0.82rem;
+  border: 1px solid rgba(0,0,0,0.18);
+  background: #fff;
+  color: #444;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nc-toolbar .nc-btn:hover { background: #f1f3f6; }
+.nc-toolbar .nc-btn .material-icons { font-size: 1rem; }
+.nc-btn-text .material-icons   { color: #7c5cff; }
+.nc-btn-image .material-icons  { color: #e2914a; }
+.nc-btn-gen .material-icons    { color: #4a90e2; }
+.nc-toolbar .nc-hint {
+  margin-left: auto;
+  font-size: 0.74rem;
+  color: #999;
+}
+
+/* Viewport — clips the pannable world */
+.nc-viewport {
+  position: relative;
+  width: 100%;
+  height: 580px;
+  overflow: hidden;
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 10px;
+  background-color: #f7f8fa;
+  background-image: radial-gradient(circle, rgba(0,0,0,0.08) 1px, transparent 1px);
+  background-size: 22px 22px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.nc-viewport.nc-panning { cursor: grabbing; }
+
+.nc-world { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform-origin: 0 0; }
+.nc-edges { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
+.nc-edges path { fill: none; stroke-width: 2.5; }
+.nc-edges path.nc-edge-text  { stroke: #7c5cff; }
+.nc-edges path.nc-edge-image { stroke: #e2914a; }
+.nc-edges path.nc-edge-temp  { stroke-dasharray: 6 5; opacity: 0.8; }
+
+/* ---- Node shell -------------------------------------------------------- */
+.nc-node {
+  position: absolute;
+  width: 240px;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.16);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+  font-size: 0.82rem;
+}
+.nc-node.nc-selected { box-shadow: 0 4px 22px rgba(74,144,226,0.4); }
+
+.nc-node-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  color: #fff;
+  border-radius: 11px 11px 0 0;
+  cursor: move;
+  font-weight: 600;
+}
+.nc-type-text   .nc-node-head { background: linear-gradient(180deg,#8b6cff,#7250e6); }
+.nc-type-image  .nc-node-head { background: linear-gradient(180deg,#eaa15c,#dd8636); }
+.nc-type-generate .nc-node-head { background: linear-gradient(180deg,#4a90e2,#3a7bc8); }
+.nc-node-head .material-icons { font-size: 0.95rem; }
+.nc-node-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nc-node-del { cursor: pointer; opacity: 0.85; line-height: 1; }
+.nc-node-del:hover { opacity: 1; }
+
+.nc-node-body { padding: 9px 10px 11px; }
+.nc-node-body textarea {
+  width: 100%; box-sizing: border-box; min-height: 56px; resize: vertical;
+  font: inherit; font-size: 0.8rem; padding: 6px 7px;
+  border: 1px solid rgba(0,0,0,0.18); border-radius: 7px;
+}
+
+/* Generate node input rows (left ports) */
+.nc-inrow {
+  position: relative;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.74rem; color: #666; padding: 3px 0;
+}
+
+/* Image upload / preview slot */
+.nc-input-slot {
+  margin-top: 8px; position: relative;
+  border: 1px dashed rgba(0,0,0,0.25); border-radius: 8px; min-height: 64px;
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  font-size: 0.72rem; color: #999; overflow: hidden; cursor: pointer;
+}
+.nc-input-slot.nc-has-img { border-style: solid; padding: 0; }
+.nc-input-slot img { width: 100%; display: block; }
+
+/* Aspect ratio control */
+.nc-ratio-label { font-size: 0.72rem; color: #888; margin: 9px 0 4px; }
+.nc-ratio { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.78rem;
+  padding: 5px 7px; border: 1px solid rgba(0,0,0,0.18); border-radius: 7px; background: #fff; }
+
+/* Per-node model + output-type selectors */
+.nc-model { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.78rem;
+  padding: 5px 6px; border: 1px solid rgba(0,0,0,0.18); border-radius: 7px; background: #fff; margin-bottom: 4px; }
+.nc-output-type { width: 100%; box-sizing: border-box; font: inherit; font-size: 0.78rem;
+  padding: 5px 7px; border: 1px solid rgba(0,0,0,0.18); border-radius: 7px; background: #fff; text-transform: capitalize; }
+.nc-out-kind { font-size: 0.72rem; color: #888; margin: 8px 0 2px; text-transform: capitalize; }
+.nc-node-body .nc-instr { min-height: 42px; margin-top: 0; }
+.nc-output-text { padding: 8px 9px; font-size: 0.78rem; color: #333; white-space: pre-wrap;
+  max-height: 170px; overflow: auto; background: #fff; }
+.nc-output video { width: 100%; display: block; }
+
+.nc-node-actions { display: flex; gap: 6px; margin-top: 9px; }
+.nc-node-actions button {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  padding: 6px 8px; font-size: 0.78rem; border: none; border-radius: 7px; cursor: pointer;
+}
+.nc-gen-btn { background: #2da44e; color: #fff; }
+.nc-gen-btn:hover { background: #268a42; }
+.nc-gen-btn:disabled { opacity: 0.6; cursor: default; }
+.nc-next-btn { background: rgba(74,144,226,0.12); color: #3a7bc8; }
+.nc-next-btn:hover { background: rgba(74,144,226,0.22); }
+.nc-node-actions button .material-icons { font-size: 0.95rem; }
+
+.nc-output { margin-top: 9px; border-radius: 8px; overflow: hidden; position: relative; background: #f0f1f3; }
+.nc-output img { width: 100%; display: block; cursor: zoom-in; }
+.nc-output-empty { min-height: 40px; display: flex; align-items: center; justify-content: center; color: #bbb; font-size: 0.72rem; }
+.nc-spin { width: 18px; height: 18px; border: 2px solid rgba(74,144,226,0.3); border-top-color: #4a90e2; border-radius: 50%; animation: nc-spin 0.8s linear infinite; }
+@keyframes nc-spin { to { transform: rotate(360deg); } }
+
+/* ---- Ports ------------------------------------------------------------- */
+.nc-port {
+  position: absolute; width: 15px; height: 15px; border-radius: 50%;
+  background: #fff; border: 2.5px solid #888; cursor: crosshair; z-index: 3;
+}
+.nc-port[data-ptype="text"]  { border-color: #7c5cff; }
+.nc-port[data-ptype="image"] { border-color: #e2914a; }
+.nc-port.nc-filled[data-ptype="text"]  { background: #7c5cff; }
+.nc-port.nc-filled[data-ptype="image"] { background: #e2914a; }
+.nc-port-out { right: -9px; top: 50%; transform: translateY(-50%); }
+.nc-port-in  { left: -19px; top: 50%; transform: translateY(-50%); }

@@ -493,13 +493,28 @@ class ArtsEngine {
     const node = document.querySelector(`.ae-node-card[data-idx="${idx}"]`);
     if (node) node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
-
+  
   removeScene(idx) {
     this.scenes.splice(idx, 1);
-    this.selectedSceneIdx = this.scenes.length ? 1 : null;
+    
+    if (!this.scenes.length) {
+      this.selectedSceneIdx = null;
+    } else {
+      const nextIdx = Math.min(idx, this.scenes.length - 1);
+      this.selectedSceneIdx = nextIdx + 1;
+    }
+    if (this._editingSceneIdx === idx) {
+      this._editingSceneIdx = null;
+    } else if (this._editingSceneIdx > idx) {
+      this._editingSceneIdx--;
+    }
+    
     this.renderPromptList();
     this.renderStoryboard();
-    if (this.selectedSceneIdx === 0 && this.scenes.length) this.selectScene(0);
+    
+    if (this.selectedSceneIdx !== null) {
+      this.selectScene(this.selectedSceneIdx - 1);
+    }
   }
 
   addScene() {
@@ -514,6 +529,18 @@ class ArtsEngine {
     this.renderStoryboard();
     const ta = document.getElementById('promptInput');
     if (ta) ta.value = '';
+  }
+  editScene(idx) {
+    this._editingSceneIdx = idx;
+    this.renderStoryboard();
+    // Focus textarea after render
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`ae-edit-${idx}`);
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    });
   }
 
   clearScenes() {
@@ -536,6 +563,26 @@ class ArtsEngine {
     this.setStatus('', '');
   }
 
+  saveSceneEdit(idx) {
+    const el = document.getElementById(`ae-edit-${idx}`);
+    if (!el) return;
+    const value = el.value.trim();
+    if (!value) {
+      this.setStatus("error", "Scene prompt cannot be empty");
+      return;
+    }
+    this.scenes[idx].prompt = value;
+    this._editingSceneIdx = null;
+    this.renderPromptList();
+    this.renderStoryboard();
+    if (this.selectedSceneIdx === idx + 1) {
+      this.selectScene(idx);
+    }
+  }
+  cancelSceneEdit() {
+    this._editingSceneIdx = null;
+    this.renderStoryboard();
+  }
   // -------------------------------------------------------------------------
   // Scene column usage
   // -------------------------------------------------------------------------
@@ -687,15 +734,38 @@ class ArtsEngine {
         : `<div class="ae-node-thumb" style="display:flex;align-items:center;justify-content:center;">
              <span class="material-icons" style="opacity:0.3;font-size:1.8rem">image</span>
            </div>`;
-      const arrow = idx < this.scenes.length - 1
-        ? `<div class="ae-node-arrow"><span class="material-icons">arrow_forward</span></div>` : '';
-      return `
+        const arrow =
+          idx < this.scenes.length - 1
+            ? `<div class="ae-node-arrow"><span class="material-icons">arrow_forward</span></div>`
+            : "";
+        const editing = this._editingSceneIdx === idx;
+        const active = this.selectedSceneIdx === idx + 1 ? " active" : "";
+        const body = editing
+          ? `<textarea class="ae-node-edit" id="ae-edit-${idx}"
+               onclick="event.stopPropagation()"
+               onkeydown="if(event.key==='Escape'){event.stopPropagation();artsEngine.cancelSceneEdit();}"
+               placeholder="Describe the scene…">${this.escapeHtml(scene.prompt || "")}</textarea>
+             <div class="ae-node-edit-actions" onclick="event.stopPropagation()">
+               <button class="ae-node-edit-save" onclick="artsEngine.saveSceneEdit(${idx})">Save</button>
+               <button class="ae-node-edit-cancel" onclick="artsEngine.cancelSceneEdit()">Cancel</button>
+             </div>`
+          : `<div class="ae-node-prompt">${this.escapeHtml(scene.prompt)}</div>
+             ${scene.style ? `<div class="ae-node-label">${this.escapeHtml(scene.style)}</div>` : ""}`;
+        return `
         <div class="ae-scene-node">
-          <div class="ae-node-card" data-idx="${idx}" onclick="artsEngine.selectScene(${idx})">
-            <div class="ae-node-num">Scene ${scene.scene || idx + 1}</div>
+          <div class="ae-node-card${active}" data-idx="${idx}" onclick="artsEngine.selectScene(${idx})">
+            <div class="ae-node-num">Scene ${scene.scene || idx + 1}
+              <span class="ae-node-actions">
+                <button class="ae-node-action ae-edit-btn" title="Edit scene"
+                  onclick="event.stopPropagation();artsEngine.editScene(${idx})">
+                  <span class="material-icons">edit</span></button>
+                <button class="ae-node-action ae-delete-btn" title="Delete scene"
+                  onclick="event.stopPropagation();artsEngine.removeScene(${idx})">
+                  <span class="material-icons">close</span></button>
+              </span>
+            </div>
             ${thumbHtml}
-            <div class="ae-node-prompt">${this.escapeHtml(scene.prompt)}</div>
-            ${scene.style ? `<div class="ae-node-label">${this.escapeHtml(scene.style)}</div>` : ''}
+            ${body}
           </div>
           ${arrow}
         </div>`;
