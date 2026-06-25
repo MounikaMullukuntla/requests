@@ -4,6 +4,43 @@
    Mounted into #nodeCanvasMount in engine/index.html.
    =========================================================================== */
 
+.nc-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.nc-panel-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid rgba(0,0,0,0.16);
+  border-radius: 7px;
+  background: #fff;
+  color: #3a7bc8;
+  font: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.nc-panel-toggle:hover { background: #f1f5f9; }
+.nc-panel-toggle .material-icons { font-size: 0.95rem; }
+.nc-panel-collapsed .nc-panel-heading { margin-bottom: 0; }
+.nc-panel-collapsed .nc-panel-content { display: none; }
+.dark .nc-panel-toggle {
+  border-color: rgba(255,255,255,0.2);
+  background: #2a2a2a;
+  color: #8fc2ff;
+}
+.dark .nc-panel-toggle:hover { background: #343a44; }
+
+.nc-model-links {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .nc-toolbar {
   display: flex;
   align-items: center;
@@ -51,6 +88,69 @@
   touch-action: none;
 }
 .nc-viewport.nc-panning { cursor: grabbing; }
+
+.nc-zoom-controls {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(0,0,0,0.16);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.94);
+  box-shadow: 0 3px 12px rgba(0,0,0,0.12);
+}
+.nc-zoom-controls button {
+  width: 34px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #334155;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.nc-zoom-controls button:hover { background: #eef2f7; }
+.nc-zoom-level {
+  min-width: 48px;
+  color: #64748b;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  pointer-events: none;
+}
+
+.nc-minimap {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 10;
+  width: 180px;
+  height: 120px;
+  overflow: hidden;
+  border: 1px solid rgba(0,0,0,0.18);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.94);
+  box-shadow: 0 3px 12px rgba(0,0,0,0.12);
+  cursor: crosshair;
+}
+.nc-minimap canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.dark .nc-zoom-controls,
+.dark .nc-minimap {
+  border-color: rgba(255,255,255,0.2);
+  background: rgba(35,35,35,0.94);
+}
+.dark .nc-zoom-controls button { color: #e2e8f0; }
+.dark .nc-zoom-controls button:hover { background: #343a44; }
+.dark .nc-zoom-level { color: #aab4c3; }
 
 .nc-world { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform-origin: 0 0; }
 .nc-edges { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
@@ -144,6 +244,50 @@
 .nc-output { margin-top: 9px; border-radius: 8px; overflow: hidden; position: relative; background: #f0f1f3; }
 .nc-output img { width: 100%; display: block; cursor: zoom-in; }
 .nc-output-empty { min-height: 40px; display: flex; align-items: center; justify-content: center; color: #bbb; font-size: 0.72rem; }
+.nc-output-empty.nc-generating { gap: 8px; }
+.nc-elapsed { font-variant-numeric: tabular-nums; }
+.nc-model-output {
+  position: relative;
+  background-color: #e8edf3;
+  background-image:
+    linear-gradient(45deg, rgba(100,116,139,0.08) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(100,116,139,0.08) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(100,116,139,0.08) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(100,116,139,0.08) 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+.nc-model-output model-viewer {
+  display: block;
+  width: 100%;
+  height: 220px;
+  background: transparent;
+  --poster-color: #e8edf3;
+}
+.nc-model-status {
+  position: absolute;
+  top: 96px;
+  left: 10px;
+  right: 10px;
+  color: #64748b;
+  font-size: 0.72rem;
+  text-align: center;
+  pointer-events: none;
+}
+.nc-model-status.error {
+  color: #b42318;
+  font-weight: 600;
+}
+.nc-model-output a {
+  display: block;
+  padding: 7px 9px;
+  background: #252525;
+  color: #8fc2ff;
+  font-size: 0.72rem;
+  text-align: center;
+  text-decoration: none;
+}
+.nc-model-output a:hover { text-decoration: underline; }
 .nc-spin { width: 18px; height: 18px; border: 2px solid rgba(74,144,226,0.3); border-top-color: #4a90e2; border-radius: 50%; animation: nc-spin 0.8s linear infinite; }
 @keyframes nc-spin { to { transform: rotate(360deg); } }
 

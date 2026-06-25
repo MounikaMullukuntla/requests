@@ -29,6 +29,9 @@
   ];
   // Output kinds we can render, in preference order for a model's default.
   const OUTPUT_ORDER = ["image", "video", "3d", "text"];
+  const STATE_DB = "arts-engine-node-canvas";
+  const STATE_STORE = "workspace";
+  const STATE_KEY = "current";
 
   let SEQ = 0;
   const getAE = () =>
@@ -50,9 +53,31 @@
       this.zoom = 1;
       this.selectedId = null;
       this._connecting = null;
+      this._persistReady = false;
+      this._saveTimer = null;
+      this._dbPromise = null;
       this._build();
+      this._bindPanelToggle();
       this._bindGlobal();
-      this._seed();
+      this._restoreState().then((restored) => {
+        if (!restored) this._seed();
+        this._persistReady = true;
+        this._saveState();
+      }).catch((err) => {
+        console.warn("Node Canvas restore failed:", err);
+        this._seed();
+        this._persistReady = true;
+        this._saveState();
+      });
+      window.addEventListener("pagehide", () => this._saveState());
+      (window.AE_CONFIG_PROMISE || Promise.resolve()).then(() => {
+        const ae = getAE();
+        if (ae && window.AE_API_BASE)
+          ae.apiBase = window.AE_API_BASE.replace(/\/$/, "") + "/api";
+        this.nodes.forEach((node) => {
+          if (node.output3d) this._renderOutput(node);
+        });
+      });
     }
 
     _seed() {
@@ -60,6 +85,169 @@
       const g = this.addNode("generate", { x: 320, y: 70 });
       this.addNode("image", { x: 30, y: 250 });
       this.connect(t.id, g.id, "prompt", "text");
+    }
+
+    _bindPanelToggle() {
+      const panel = this.mount.closest("#nodeCanvasPanel");
+      const toggle = panel?.querySelector("#nodeCanvasToggle");
+      if (!panel || !toggle) return;
+      const storageKey = "arts-engine-node-canvas-expanded";
+      let expanded = false;
+      try {
+        expanded = window.localStorage.getItem(storageKey) === "true";
+      } catch (_) {}
+
+      const setExpanded = (isExpanded) => {
+        panel.classList.toggle("nc-panel-collapsed", !isExpanded);
+        toggle.setAttribute("aria-expanded", String(isExpanded));
+        const icon = toggle.querySelector(".material-icons");
+        const label = toggle.querySelector(".nc-panel-toggle-label");
+        if (icon)
+          icon.textContent = isExpanded ? "close_fullscreen" : "open_in_full";
+        if (label) label.textContent = isExpanded ? "Minimize" : "Open Canvas";
+      };
+
+      setExpanded(expanded);
+      toggle.addEventListener("click", () => {
+        expanded = panel.classList.contains("nc-panel-collapsed");
+        setExpanded(expanded);
+        try {
+          window.localStorage.setItem(storageKey, String(expanded));
+        } catch (_) {}
+        if (expanded) {
+          requestAnimationFrame(() => {
+            this._applyWorld();
+            this._drawEdges();
+          });
+        }
+      });
+    }
+
+    // ---- persistence ------------------------------------------------------
+    _openStateDb() {
+      if (this._dbPromise) return this._dbPromise;
+      this._dbPromise = new Promise((resolve, reject) => {
+        if (!window.indexedDB) {
+          reject(new Error("IndexedDB is unavailable"));
+          return;
+        }
+        const req = window.indexedDB.open(STATE_DB, 1);
+        req.onupgradeneeded = () => {
+          if (!req.result.objectStoreNames.contains(STATE_STORE))
+            req.result.createObjectStore(STATE_STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      return this._dbPromise;
+    }
+
+    async _readSavedState() {
+      try {
+        const db = await this._openStateDb();
+        return await new Promise((resolve, reject) => {
+          const req = db
+            .transaction(STATE_STORE, "readonly")
+            .objectStore(STATE_STORE)
+            .get(STATE_KEY);
+          req.onsuccess = () => resolve(req.result ?? null);
+          req.onerror = () => reject(req.error);
+        });
+      } catch (err) {
+        console.warn("Node Canvas state could not be loaded:", err);
+        return null;
+      }
+    }
+
+    _snapshot() {
+      const nodes = [...this.nodes.values()].map((node) => ({
+        id: node.id,
+        type: node.type,
+        x: node.x,
+        y: node.y,
+        text: node.text || "",
+        uploadImage: node.uploadImage || null,
+        outputImage: node.outputImage || null,
+        outputText: node.outputText || null,
+        output3d: node.output3d || null,
+        output3dPoster: node.output3dPoster || null,
+        provider: node.provider,
+        model: node.model,
+        outputType: node.outputType,
+        ratio: node.ratio,
+        instructions: node.instructions || "",
+      }));
+      return {
+        version: 1,
+        seq: SEQ,
+        pan: this.pan,
+        zoom: this.zoom,
+        selectedId: this.selectedId,
+        nodes,
+        edges: this.edges.map((edge) => ({ ...edge })),
+      };
+    }
+
+    async _saveState() {
+      if (!this._persistReady) return;
+      try {
+        const db = await this._openStateDb();
+        const state = this._snapshot();
+        await new Promise((resolve, reject) => {
+          const tx = db.transaction(STATE_STORE, "readwrite");
+          tx.objectStore(STATE_STORE).put(state, STATE_KEY);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
+          tx.onabort = () => reject(tx.error);
+        });
+      } catch (err) {
+        console.warn("Node Canvas state could not be saved:", err);
+      }
+    }
+
+    _scheduleSave() {
+      if (!this._persistReady) return;
+      clearTimeout(this._saveTimer);
+      this._saveTimer = setTimeout(() => this._saveState(), 150);
+    }
+
+    async _restoreState() {
+      const state = await this._readSavedState();
+      if (!state || state.version !== 1 || !Array.isArray(state.nodes))
+        return false;
+
+      if (Number.isFinite(state.pan?.x) && Number.isFinite(state.pan?.y))
+        this.pan = { x: state.pan.x, y: state.pan.y };
+      if (Number.isFinite(state.zoom))
+        this.zoom = Math.min(1.5, Math.max(0.1, state.zoom));
+
+      for (const saved of state.nodes) {
+        if (!saved?.id || !["text", "image", "generate"].includes(saved.type))
+          continue;
+        const node = {
+          ...saved,
+          x: Number.isFinite(saved.x) ? saved.x : 60,
+          y: Number.isFinite(saved.y) ? saved.y : 60,
+          generating: false,
+          _error: null,
+        };
+        this.nodes.set(node.id, node);
+        this._createNodeEl(node);
+        this._positionNode(node);
+        const numericId = Number.parseInt(node.id.replace(/^n/, ""), 10);
+        if (Number.isFinite(numericId)) SEQ = Math.max(SEQ, numericId);
+      }
+      if (Number.isFinite(state.seq)) SEQ = Math.max(SEQ, state.seq);
+
+      this.edges = (Array.isArray(state.edges) ? state.edges : []).filter(
+        (edge) => this.nodes.has(edge.from) && this.nodes.has(edge.to),
+      );
+      this._applyWorld();
+      this._refreshPorts();
+      this._drawEdges();
+      if (state.selectedId && this.nodes.has(state.selectedId))
+        this.selectNode(state.selectedId);
+      return true;
     }
 
     // ---- model registry helpers -----------------------------------------
@@ -136,10 +324,36 @@
           <button class="nc-btn" data-act="clear"><span class="material-icons">clear_all</span>Clear</button>
           <span class="nc-hint">Pick a model per Generate node · ports adapt to it · purple = text, orange = image</span>
         </div>
-        <div class="nc-viewport"><div class="nc-world"><svg class="nc-edges"><g></g></svg></div></div>`;
+        <div class="nc-viewport">
+          <div class="nc-world"><svg class="nc-edges"><g></g></svg></div>
+          <div class="nc-zoom-controls" aria-label="Canvas zoom controls">
+            <button type="button" data-zoom="out" title="Zoom out" aria-label="Zoom out">−</button>
+            <span class="nc-zoom-level">100%</span>
+            <button type="button" data-zoom="in" title="Zoom in" aria-label="Zoom in">+</button>
+          </div>
+          <div class="nc-minimap" title="Click to navigate the canvas">
+            <canvas aria-label="Workflow minimap"></canvas>
+          </div>
+        </div>`;
       this.viewport = this.mount.querySelector(".nc-viewport");
       this.world = this.mount.querySelector(".nc-world");
       this.edgeLayer = this.mount.querySelector(".nc-edges g");
+      this.zoomLevel = this.mount.querySelector(".nc-zoom-level");
+      this.minimap = this.mount.querySelector(".nc-minimap");
+      this.minimapCanvas = this.minimap.querySelector("canvas");
+
+      this.mount.querySelector('[data-zoom="out"]').onclick = (e) => {
+        e.stopPropagation();
+        this._zoomBy(1 / 1.2);
+      };
+      this.mount.querySelector('[data-zoom="in"]').onclick = (e) => {
+        e.stopPropagation();
+        this._zoomBy(1.2);
+      };
+      this.minimap.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        this._navigateFromMinimap(e);
+      });
 
       this.mount.querySelectorAll("[data-add]").forEach((b) => {
         b.onclick = () => {
@@ -148,10 +362,8 @@
         };
       });
       this.mount.querySelector('[data-act="reset"]').onclick = () => {
-        this.pan = { x: 30, y: 24 };
-        this.zoom = 1;
-        this._applyWorld();
-        this._drawEdges();
+        this._fitView();
+        this._scheduleSave();
       };
       this.mount.querySelector('[data-act="clear"]').onclick = () => {
         if (!confirm("Remove all nodes from the canvas?")) return;
@@ -160,6 +372,9 @@
         this.nodeEls.clear();
         this.world.querySelectorAll(".nc-node").forEach((el) => el.remove());
         this._drawEdges();
+        this.selectedId = null;
+        clearTimeout(this._saveTimer);
+        this._saveState();
       };
       this._applyWorld();
     }
@@ -168,6 +383,176 @@
       const arr = [...this.nodes.values()];
       const last = arr[arr.length - 1];
       return last ? { x: last.x + 36, y: last.y + 36 } : { x: 40, y: 40 };
+    }
+
+    _fitView() {
+      if (!this.nodes.size) {
+        this.pan = { x: 30, y: 24 };
+        this.zoom = 1;
+        this._applyWorld();
+        this._drawEdges();
+        return;
+      }
+
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      this.nodes.forEach((node, id) => {
+        const el = this.nodeEls.get(id);
+        minX = Math.min(minX, node.x);
+        minY = Math.min(minY, node.y);
+        maxX = Math.max(maxX, node.x + (el?.offsetWidth || 220));
+        maxY = Math.max(maxY, node.y + (el?.offsetHeight || 160));
+      });
+
+      const padding = 32;
+      const viewportWidth = this.viewport.clientWidth;
+      const viewportHeight = this.viewport.clientHeight;
+      const contentWidth = Math.max(1, maxX - minX);
+      const contentHeight = Math.max(1, maxY - minY);
+      const availableWidth = Math.max(1, viewportWidth - padding * 2);
+      const availableHeight = Math.max(1, viewportHeight - padding * 2);
+      this.zoom = Math.min(
+        1.5,
+        Math.max(
+          0.1,
+          Math.min(availableWidth / contentWidth, availableHeight / contentHeight),
+        ),
+      );
+      this.pan = {
+        x: (viewportWidth - contentWidth * this.zoom) / 2 - minX * this.zoom,
+        y: (viewportHeight - contentHeight * this.zoom) / 2 - minY * this.zoom,
+      };
+      this._applyWorld();
+      this._drawEdges();
+    }
+
+    _zoomBy(factor) {
+      const cx = this.viewport.clientWidth / 2;
+      const cy = this.viewport.clientHeight / 2;
+      const worldX = (cx - this.pan.x) / this.zoom;
+      const worldY = (cy - this.pan.y) / this.zoom;
+      const next = Math.min(1.5, Math.max(0.1, this.zoom * factor));
+      this.zoom = next;
+      this.pan = {
+        x: cx - worldX * next,
+        y: cy - worldY * next,
+      };
+      this._applyWorld();
+      this._drawEdges();
+      this._scheduleSave();
+    }
+
+    _navigateFromMinimap(e) {
+      const map = this._minimapTransform;
+      if (!map) return;
+      const rect = this.minimapCanvas.getBoundingClientRect();
+      const worldX = (e.clientX - rect.left - map.offsetX) / map.scale + map.minX;
+      const worldY = (e.clientY - rect.top - map.offsetY) / map.scale + map.minY;
+      this.pan = {
+        x: this.viewport.clientWidth / 2 - worldX * this.zoom,
+        y: this.viewport.clientHeight / 2 - worldY * this.zoom,
+      };
+      this._applyWorld();
+      this._drawEdges();
+      this._scheduleSave();
+    }
+
+    _drawMinimap() {
+      const canvas = this.minimapCanvas;
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const width = rect.width;
+      const height = rect.height;
+      if (!width || !height) return;
+      const dpr = window.devicePixelRatio || 1;
+      const pixelWidth = Math.round(width * dpr);
+      const pixelHeight = Math.round(height * dpr);
+      if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+      }
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+
+      const view = {
+        x: -this.pan.x / this.zoom,
+        y: -this.pan.y / this.zoom,
+        width: this.viewport.clientWidth / this.zoom,
+        height: this.viewport.clientHeight / this.zoom,
+      };
+      let minX = view.x;
+      let minY = view.y;
+      let maxX = view.x + view.width;
+      let maxY = view.y + view.height;
+      this.nodes.forEach((node, id) => {
+        const el = this.nodeEls.get(id);
+        minX = Math.min(minX, node.x);
+        minY = Math.min(minY, node.y);
+        maxX = Math.max(maxX, node.x + (el?.offsetWidth || 220));
+        maxY = Math.max(maxY, node.y + (el?.offsetHeight || 160));
+      });
+
+      const mapPadding = 7;
+      const boundsWidth = Math.max(1, maxX - minX);
+      const boundsHeight = Math.max(1, maxY - minY);
+      const scale = Math.min(
+        (width - mapPadding * 2) / boundsWidth,
+        (height - mapPadding * 2) / boundsHeight,
+      );
+      const offsetX = (width - boundsWidth * scale) / 2;
+      const offsetY = (height - boundsHeight * scale) / 2;
+      this._minimapTransform = { minX, minY, scale, offsetX, offsetY };
+      const px = (x) => offsetX + (x - minX) * scale;
+      const py = (y) => offsetY + (y - minY) * scale;
+
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(100, 116, 139, 0.45)";
+      for (const edge of this.edges) {
+        const from = this.nodes.get(edge.from);
+        const to = this.nodes.get(edge.to);
+        if (!from || !to) continue;
+        const fromEl = this.nodeEls.get(from.id);
+        const toEl = this.nodeEls.get(to.id);
+        ctx.beginPath();
+        ctx.moveTo(
+          px(from.x + (fromEl?.offsetWidth || 220) / 2),
+          py(from.y + (fromEl?.offsetHeight || 160) / 2),
+        );
+        ctx.lineTo(
+          px(to.x + (toEl?.offsetWidth || 220) / 2),
+          py(to.y + (toEl?.offsetHeight || 160) / 2),
+        );
+        ctx.stroke();
+      }
+
+      const colors = {
+        text: "#7c5cff",
+        image: "#e2914a",
+        generate: "#4a90e2",
+      };
+      this.nodes.forEach((node, id) => {
+        const el = this.nodeEls.get(id);
+        ctx.fillStyle = colors[node.type] || "#64748b";
+        ctx.fillRect(
+          px(node.x),
+          py(node.y),
+          Math.max(3, (el?.offsetWidth || 220) * scale),
+          Math.max(3, (el?.offsetHeight || 160) * scale),
+        );
+      });
+
+      ctx.strokeStyle = "#2563eb";
+      ctx.lineWidth = 1.5;
+      ctx.fillStyle = "rgba(37, 99, 235, 0.08)";
+      const vx = px(view.x);
+      const vy = py(view.y);
+      const vw = view.width * scale;
+      const vh = view.height * scale;
+      ctx.fillRect(vx, vy, vw, vh);
+      ctx.strokeRect(vx, vy, vw, vh);
     }
 
     // ---- node data + DOM --------------------------------------------------
@@ -187,20 +572,25 @@
       };
       if (type === "generate") {
         const def = this._defaultModel();
-        node.provider = opts.provider || def.provider;
-        node.model = opts.model || def.model;
+        const previous = [...this.nodes.values()]
+          .reverse()
+          .find((existing) => existing.type === "generate");
+        node.provider = opts.provider || previous?.provider || def.provider;
+        node.model = opts.model || previous?.model || def.model;
         const cfg = this._modelCfg(node.provider, node.model);
-        node.outputType =
-          opts.outputType &&
-          this._renderableOutputs(cfg).includes(opts.outputType)
-            ? opts.outputType
-            : this._defaultOutputType(cfg);
-        node.ratio = opts.ratio || getAE()?.prefs?.ratio || "square";
+        const inheritedOutput = opts.outputType || previous?.outputType;
+        node.outputType = this._renderableOutputs(cfg).includes(inheritedOutput)
+          ? inheritedOutput
+          : this._defaultOutputType(cfg);
+        node.ratio =
+          opts.ratio || previous?.ratio || getAE()?.prefs?.ratio || "square";
         node.instructions = opts.instructions || "";
       }
       this.nodes.set(id, node);
       this._createNodeEl(node);
       this._positionNode(node);
+      this._drawMinimap();
+      this._scheduleSave();
       return node;
     }
 
@@ -211,6 +601,10 @@
       el.innerHTML = this._nodeMarkup(node);
       this.world.appendChild(el);
       this.nodeEls.set(node.id, el);
+      if (node.output3d) {
+        this._ensureModelViewer();
+        this._wireModelViewer(el.querySelector(".nc-output"));
+      }
       // Root-level listener bound once (survives body rebuilds).
       el.addEventListener("pointerdown", () => this.selectNode(node.id));
       this._wireNodeEl(node, el);
@@ -323,14 +717,28 @@
     }
 
     _outputInner(node) {
-      if (node.generating)
-        return `<div class="nc-output-empty"><span class="nc-spin"></span></div>`;
+      if (node.generating) {
+        const elapsed = Math.max(
+          0,
+          Math.floor((Date.now() - (node._generationStartedAt || Date.now())) / 1000),
+        );
+        const label = node.outputType === "3d" ? "Generating 3D" : "Generating";
+        return `<div class="nc-output-empty nc-generating"><span class="nc-spin"></span><span class="nc-elapsed">${label}… ${this._formatElapsed(elapsed)}</span></div>`;
+      }
       if (node._error)
         return `<div class="nc-output-empty" style="color:#c33">${esc(node._error)}</div>`;
       if (node.outputType === "text" && node.outputText)
         return `<div class="nc-output-text">${esc(node.outputText)}</div>`;
       if (node.output3d) {
-        return `<model-viewer src="${esc(node.output3d)}"${node.output3dPoster ? ` poster="${esc(node.output3dPoster)}"` : ""} camera-controls auto-rotate environment-image="neutral" exposure="1" shadow-intensity="1" tone-mapping="aces" loading="eager" style="width:100%;height:100%;background:#1a1a1a;--poster-color:transparent"></model-viewer>`;
+        const previewUrl = this._modelPreviewUrl(node.output3d);
+        return `<div class="nc-model-output">
+          <model-viewer src="${esc(previewUrl)}"${node.output3dPoster ? ` poster="${esc(node.output3dPoster)}"` : ""} camera-controls auto-rotate auto-rotate-delay="0" environment-image="neutral" exposure="1.25" shadow-intensity="0.8" tone-mapping="aces" loading="eager" interaction-prompt="none"></model-viewer>
+          <div class="nc-model-status">Loading 3D preview…</div>
+          <div class="nc-model-links">
+            <a href="${esc(node.output3d)}" target="_blank" rel="noopener">Open 3D model</a>
+            ${node.output3dPoster ? `<a href="${esc(node.output3dPoster)}" target="_blank" rel="noopener">Open rendered poster</a>` : ""}
+          </div>
+        </div>`;
       }
       if (node.outputImage) {
         return node.outputType === "video"
@@ -338,6 +746,71 @@
           : `<img src="${node.outputImage}" alt="output">`;
       }
       return `<div class="nc-output-empty">no output yet</div>`;
+    }
+
+    _formatElapsed(totalSeconds) {
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
+
+    _modelPreviewUrl(url) {
+      if (!/^https?:\/\//i.test(url)) return url;
+      const apiBase = window.AE_API_BASE
+        ? window.AE_API_BASE.replace(/\/$/, "") + "/api"
+        : getAE()?.apiBase;
+      return apiBase
+        ? `${apiBase}/proxy/model?url=${encodeURIComponent(url)}`
+        : url;
+    }
+
+    _ensureModelViewer() {
+      if (window.customElements?.get("model-viewer")) return;
+      if (document.querySelector("script[data-nc-model-viewer]")) return;
+      const script = document.createElement("script");
+      script.type = "module";
+      script.src = "https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js";
+      script.dataset.ncModelViewer = "1";
+      script.onerror = () => {
+        this._modelViewerFailed = true;
+        this.mount.querySelectorAll(".nc-model-status").forEach((status) => {
+          status.hidden = false;
+          status.textContent =
+            "3D viewer failed to load. Use Open 3D model below.";
+          status.classList.add("error");
+        });
+      };
+      document.head.appendChild(script);
+    }
+
+    _wireModelViewer(root) {
+      const viewer = root?.querySelector("model-viewer");
+      const status = root?.querySelector(".nc-model-status");
+      if (!viewer || !status || viewer.dataset.ncWired) return;
+      viewer.dataset.ncWired = "1";
+      if (this._modelViewerFailed) {
+        status.textContent =
+          "3D viewer failed to load. Use Open 3D model below.";
+        status.classList.add("error");
+      }
+      const timeout = setTimeout(() => {
+        if (status.hidden) return;
+        status.textContent =
+          "3D preview is taking too long. Use Open 3D model below.";
+        status.classList.add("error");
+      }, 30000);
+      viewer.addEventListener("load", () => {
+        clearTimeout(timeout);
+        status.hidden = true;
+        this._drawMinimap();
+      });
+      viewer.addEventListener("error", () => {
+        clearTimeout(timeout);
+        status.hidden = false;
+        status.textContent =
+          "3D preview unavailable. Use Open 3D model below.";
+        status.classList.add("error");
+      });
     }
 
     _wireNodeEl(node, el) {
@@ -358,6 +831,7 @@
         const ta = el.querySelector("textarea");
         ta.addEventListener("input", () => {
           node.text = ta.value;
+          this._scheduleSave();
         });
         ta.addEventListener("pointerdown", (e) => e.stopPropagation());
       } else if (node.type === "image") {
@@ -388,6 +862,7 @@
         if (rt) {
           rt.addEventListener("change", (e) => {
             node.ratio = e.target.value;
+            this._scheduleSave();
           });
           rt.addEventListener("pointerdown", stop);
         }
@@ -395,6 +870,7 @@
         if (instr) {
           instr.addEventListener("input", (e) => {
             node.instructions = e.target.value;
+            this._scheduleSave();
           });
           instr.addEventListener("pointerdown", stop);
         }
@@ -423,7 +899,7 @@
     // connections the new shape can't support.
     _rebuildGenerate(node) {
       const cfg = this._modelCfg(node.provider, node.model);
-      if (!cfg?.imageInput)
+      if (!this._modelSupportsImageInput(node))
         this.edges = this.edges.filter(
           (e) => !(e.to === node.id && e.toPort === "image"),
         );
@@ -436,6 +912,7 @@
       this._wireNodeEl(node, el);
       this._refreshPorts();
       this._drawEdges();
+      this._scheduleSave();
     }
 
     _onUpload(node, input) {
@@ -445,6 +922,7 @@
       r.onload = () => {
         node.uploadImage = r.result;
         this._renderImageSlot(node);
+        this._scheduleSave();
       };
       r.readAsDataURL(f);
     }
@@ -467,19 +945,25 @@
 
     removeNode(id) {
       const node = this.nodes.get(id);
+      if (node?._elapsedTimer) clearInterval(node._elapsedTimer);
       this.edges = this.edges.filter((e) => e.from !== id && e.to !== id);
       this.nodeEls.get(id)?.remove();
       this.nodeEls.delete(id);
       this.nodes.delete(id);
       // Drop its Storyboard scene, if it had one.
       const ae = getAE();
-      if (node?._scene && ae && Array.isArray(ae.scenes)) {
-        const i = ae.scenes.indexOf(node._scene);
+      if (node && ae && Array.isArray(ae.scenes)) {
+        const scene = node._scene || ae.scenes.find((item) =>
+          item?._nodeCanvasId === node.id ||
+          (node.outputImage && item?.image === node.outputImage),
+        );
+        const i = scene ? ae.scenes.indexOf(scene) : -1;
         if (i >= 0) ae.scenes.splice(i, 1);
         if (typeof ae.renderStoryboard === "function") ae.renderStoryboard();
       }
       this._refreshPorts();
       this._drawEdges();
+      this._scheduleSave();
     }
 
     selectNode(id) {
@@ -487,6 +971,7 @@
       this.nodeEls.forEach((el, nid) =>
         el.classList.toggle("nc-selected", nid === id),
       );
+      this._scheduleSave();
     }
 
     // ---- "Next scene" -----------------------------------------------------
@@ -526,6 +1011,7 @@
       this.edges.push({ from: fromId, to: toId, toPort, ptype });
       this._refreshPorts();
       this._drawEdges();
+      this._scheduleSave();
     }
 
     _wouldCycle(fromId, toId) {
@@ -600,6 +1086,49 @@
       return [scene, extra].filter(Boolean).join("\n\n");
     }
 
+    _fillTemplate(value, substitutions) {
+      if (typeof value === "string") {
+        return value.replace(/\{(\w+)\}/g, (match, key) =>
+          key in substitutions ? substitutions[key] : match,
+        );
+      }
+      if (Array.isArray(value))
+        return value.map((item) => this._fillTemplate(item, substitutions));
+      if (value && typeof value === "object") {
+        return Object.fromEntries(
+          Object.entries(value).map(([key, item]) => [
+            key,
+            this._fillTemplate(item, substitutions),
+          ]),
+        );
+      }
+      return value;
+    }
+
+    async _prepareTripoImage(image, apiBase, headers) {
+      if (/^https?:\/\//i.test(image)) {
+        const pathname = new URL(image).pathname.toLowerCase();
+        return {
+          type: pathname.endsWith(".png") ? "png" : "jpg",
+          url: image,
+        };
+      }
+      const response = await fetch(`${apiBase}/upload/tripo`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ image }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || `Tripo upload HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      return {
+        type: data.file_type || "jpg",
+        file_token: data.file_token,
+      };
+    }
+
     getImageInput(genNode) {
       const e = this.edges.find(
         (x) => x.to === genNode.id && x.toPort === "image",
@@ -611,8 +1140,10 @@
         src.type === "generate" &&
         src.outputType !== "text" &&
         src.outputType !== "video"
-      )
+      ) {
+        if (src.outputType === "3d") return src.output3dPoster || null;
         return src.outputImage || null;
+      }
       return null;
     }
 
@@ -636,6 +1167,7 @@
       const up = () => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
+        this._scheduleSave();
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
@@ -665,6 +1197,7 @@
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", up);
           this.viewport.classList.remove("nc-panning");
+          this._scheduleSave();
         };
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", up);
@@ -680,13 +1213,14 @@
           const old = this.zoom;
           const next = Math.min(
             1.5,
-            Math.max(0.4, old * (e.deltaY < 0 ? 1.1 : 0.9)),
+            Math.max(0.1, old * (e.deltaY < 0 ? 1.1 : 0.9)),
           );
           this.pan.x = cx - (cx - this.pan.x) * (next / old);
           this.pan.y = cy - (cy - this.pan.y) * (next / old);
           this.zoom = next;
           this._applyWorld();
           this._drawEdges();
+          this._scheduleSave();
         },
         { passive: false },
       );
@@ -694,6 +1228,8 @@
 
     _applyWorld() {
       this.world.style.transform = `translate(${this.pan.x}px, ${this.pan.y}px) scale(${this.zoom})`;
+      if (this.zoomLevel)
+        this.zoomLevel.textContent = `${Math.round(this.zoom * 100)}%`;
     }
 
     _toWorld(clientX, clientY) {
@@ -735,6 +1271,7 @@
         const p1 = this._portCenter(this._connecting.fromId, ".nc-port-out");
         if (p1) this._addPath(p1, tempTo, this._connecting.ptype, true);
       }
+      this._drawMinimap();
     }
 
     _addPath(p1, p2, ptype, temp) {
@@ -773,8 +1310,15 @@
       )
         return;
       if (!node._scene || ae.scenes.indexOf(node._scene) < 0) {
+        node._scene = ae.scenes.find((scene) =>
+          scene?._nodeCanvasId === node.id ||
+          (node.outputImage && scene?.image === node.outputImage),
+        );
+      }
+      if (!node._scene) {
         node._scene = {
           scene: String(ae.scenes.length + 1),
+          _nodeCanvasId: node.id,
           prompt: "",
           aspect_ratio: "",
           style: "",
@@ -783,6 +1327,7 @@
         };
         ae.scenes.push(node._scene);
       }
+      node._scene._nodeCanvasId = node.id;
       node._scene.prompt = this.getPrompt(node) || node._scene.prompt || "";
       node._scene.image = node.outputImage;
       ae.renderStoryboard();
@@ -792,6 +1337,8 @@
       const out = this.nodeEls.get(node.id)?.querySelector(".nc-output");
       if (!out) return;
       out.innerHTML = this._outputInner(node);
+      this._drawMinimap();
+      this._wireModelViewer(out);
       const media = out.querySelector("img");
       if (media)
         media.addEventListener("click", () => {
@@ -841,6 +1388,20 @@
       };
 
       node.generating = true;
+      node._generationStartedAt = Date.now();
+      if (node.outputType === "3d") {
+        node._elapsedTimer = setInterval(() => {
+          if (!node.generating) return;
+          const elapsed = Math.floor(
+            (Date.now() - node._generationStartedAt) / 1000,
+          );
+          const label = this.nodeEls
+            .get(node.id)
+            ?.querySelector(".nc-elapsed");
+          if (label)
+            label.textContent = `Generating 3D… ${this._formatElapsed(elapsed)}`;
+        }, 1000);
+      }
       btn.disabled = true;
       this._renderOutput(node);
 
@@ -882,13 +1443,66 @@
           }
           node.outputImage = url;
         } else if (node.outputType === "3d") {
-          // Image-to-3D when a reference image is connected (Tripo supports it),
-          // otherwise text-to-3D. The backend accepts data: or http(s) URLs.
           const inputImg = this._modelSupportsImageInput(node)
             ? this.getImageInput(node)
             : null;
-          const body = { prompt, model: node.model };
-          if (inputImg) body.image_urls = [inputImg];
+          const modelCfg = this._modelCfg(node.provider, node.model);
+          const providerCfg = (window.KeyManagerProviders || []).find(
+            (provider) => provider.id === node.provider,
+          );
+          const spec = providerCfg?.task3d;
+          if (!spec)
+            throw new Error(
+              `No 3D configuration found for provider "${node.provider}"`,
+            );
+          const useTripoImage = node.provider === "tripo" && !!inputImg;
+          const mode = useTripoImage
+            ? "image_to_model"
+            : modelCfg?.apiMode || modelCfg?.value;
+          let modeSpec = spec.modes?.[mode];
+          if (useTripoImage) {
+            const file = await this._prepareTripoImage(
+              inputImg,
+              apiBase,
+              headers,
+            );
+            modeSpec = {
+              submitPath: "/task",
+              body: {
+                type: "image_to_model",
+                model_version: "{model}",
+                file,
+                texture: true,
+                pbr: true,
+              },
+            };
+          }
+          if (!modeSpec)
+            throw new Error(
+              `3D mode "${mode}" is not configured for "${node.provider}"`,
+            );
+          const substitutions = {
+            prompt,
+            model: modelCfg?.apiModel || modelCfg?.value || "",
+            image_url: inputImg || "",
+          };
+          const body = {
+            provider: node.provider,
+            model: modelCfg?.value || "",
+            submit_url:
+              String(spec.base || "").replace(/\/$/, "") +
+              (modeSpec.submitPath || ""),
+            submit_body: this._fillTemplate(modeSpec.body, substitutions),
+            task_id_path: spec.taskIdPath,
+            status_value_path: spec.statusValuePath,
+            status_success: spec.statusSuccess,
+            status_failure: spec.statusFailure,
+            error_message_path: spec.errorMessagePath ?? null,
+            output_path: spec.outputPath,
+            output_keys: spec.outputKeys,
+            error_code_path: spec.errorCodePath ?? null,
+            no_credits_code: spec.noCreditsCode ?? null,
+          };
           const resp = await fetch(`${apiBase}/generate/3d`, {
             method: "POST",
             headers,
@@ -899,12 +1513,7 @@
             throw new Error(er.error || `HTTP ${resp.status}`);
           }
           const data = await resp.json();
-          let urls = data.media_urls || [];
-          if (!urls.length) {
-            const jobId = data.id;
-            if (!jobId) throw new Error("3D submitted but no job id returned");
-            urls = await this._poll3d(apiBase, jobId, headers);
-          }
+          const urls = data.media_urls || [];
           node.output3d =
             urls.find((u) => /\.glb(\?|$)/i.test(u)) || urls[0] || null;
           node.output3dPoster =
@@ -912,7 +1521,7 @@
           node.outputImage = null;
           node.outputText = null;
           if (!node.output3d) throw new Error("No 3D model returned");
-          getAE()?._ensureModelViewer?.();
+          this._ensureModelViewer();
         } else {
           const body = {
             prompt,
@@ -944,9 +1553,14 @@
       } catch (err) {
         node._error = err.message || "Error";
       } finally {
+        if (node._elapsedTimer) {
+          clearInterval(node._elapsedTimer);
+          node._elapsedTimer = null;
+        }
         node.generating = false;
         btn.disabled = false;
         this._renderOutput(node);
+        this._scheduleSave();
       }
     }
 

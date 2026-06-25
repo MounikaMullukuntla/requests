@@ -332,23 +332,31 @@ window.AE_CONFIG_PROMISE = (async function applyConfig() {
         </div>
       </div>
      <!-- Node Canvas — draggable scene flowchart (ComfyUI / Flora style) -->
-      <div class="ae-panel" id="nodeCanvasPanel">
-        <h3>
-          <span class="material-icons" style="font-size:1rem;vertical-align:middle;margin-right:4px">hub</span>
-          Node Canvas
-          <span style="font-size:0.72rem;font-weight:400;color:#aaa;margin-left:6px">beta</span>
+      <div class="ae-panel nc-panel-collapsed" id="nodeCanvasPanel">
+        <h3 class="nc-panel-heading">
+          <span>
+            <span class="material-icons" style="font-size:1rem;vertical-align:middle;margin-right:4px">hub</span>
+            Node Canvas
+            <span style="font-size:0.72rem;font-weight:400;color:#aaa;margin-left:6px">beta</span>
+          </span>
+          <button class="nc-panel-toggle" id="nodeCanvasToggle" type="button" aria-expanded="false" aria-controls="nodeCanvasContent">
+            <span class="material-icons">open_in_full</span>
+            <span class="nc-panel-toggle-label">Open Canvas</span>
+          </button>
         </h3>
-        <p style="margin:0 0 12px 0;font-size:0.85rem;color:#888">
-          Flora-style flow built from separate nodes: a <strong>Text</strong> node (prompt),
-          an <strong>Image</strong> node (upload), and a <strong>Generate</strong> node with its own
-          <strong>model dropdown</strong> — the node adapts to the chosen model: the orange image-input
-          port appears only when the model supports image input, and the output type (image / text / video / 3D)
-          follows the model's capabilities. Wire an output port (●) to a matching input port
-          (purple = text, orange = image); a Generate output can feed another node. Click <strong>Next</strong>
-          to auto-chain a follow-up scene. Generated images also appear below in the Storyboard Flow.
-          Uses the provider keys from "My Model Keys" above.
-        </p>
-        <div id="nodeCanvasMount"></div>
+        <div class="nc-panel-content" id="nodeCanvasContent">
+          <p style="margin:0 0 12px 0;font-size:0.85rem;color:#888">
+            Flora-style flow built from separate nodes: a <strong>Text</strong> node (prompt),
+            an <strong>Image</strong> node (upload), and a <strong>Generate</strong> node with its own
+            <strong>model dropdown</strong> — the node adapts to the chosen model: the orange image-input
+            port appears only when the model supports image input, and the output type (image / text / video / 3D)
+            follows the model's capabilities. Wire an output port (●) to a matching input port
+            (purple = text, orange = image); a Generate output can feed another node. Click <strong>Next</strong>
+            to auto-chain a follow-up scene. Generated images also appear below in the Storyboard Flow.
+            Uses the provider keys from "My Model Keys" above.
+          </p>
+          <div id="nodeCanvasMount"></div>
+        </div>
       </div>
 
       <!-- Storyboard Flowchart Panel -->
