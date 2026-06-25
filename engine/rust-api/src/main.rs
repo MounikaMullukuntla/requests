@@ -8,11 +8,14 @@ use std::io::Write;
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, State},
-    http::HeaderMap,
+    body::Body,
+    extract::{Path, Query, State},
+    http::{header, HeaderMap, StatusCode},
+    response::Response,
     routing::{get, post},
     Json, Router,
 };
+use serde::Deserialize;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{info, Level};
@@ -62,6 +65,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/generate/video", post(generate_video))
         .route("/api/generate/video/{id}", get(video_status))
         .route("/api/generate/3d", post(generate_3d))
+        .route("/api/upload/tripo", post(upload_tripo_image))
+        .route("/api/proxy/model", get(proxy_model))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .layer(TraceLayer::new_for_http())
         .with_state(app_state);
@@ -162,6 +167,119 @@ async fn generate_3d(
         .ok_or_else(|| AppError(anyhow::anyhow!("3D generation requires a provider API key (X-Provider-Key)")))?;
     let response = task3d::run(payload, key).await?;
     Ok(Json(serde_json::to_value(response)?))
+}
+
+#[derive(Deserialize)]
+struct TripoImageUploadRequest {
+    image: String,
+}
+
+async fn upload_tripo_image(
+    headers: HeaderMap,
+    Json(payload): Json<TripoImageUploadRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    use base64::Engine;
+
+    let key = headers
+        .get("x-provider-key")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError(anyhow::anyhow!("Tripo upload requires X-Provider-Key")))?;
+    let encoded = payload
+        .image
+        .strip_prefix("data:")
+        .ok_or_else(|| AppError(anyhow::anyhow!("Tripo upload requires a data URL")))?;
+    let (metadata, data) = encoded
+        .split_once(',')
+        .ok_or_else(|| AppError(anyhow::anyhow!("malformed image data URL")))?;
+    if !metadata.contains("base64") {
+        return Err(AppError(anyhow::anyhow!("image data URL must be base64")));
+    }
+    let mime = metadata.split(';').next().unwrap_or("image/jpeg");
+    let extension = match mime {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        _ => return Err(AppError(anyhow::anyhow!("Tripo supports JPEG or PNG input"))),
+    };
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim())?;
+    if bytes.len() > 20 * 1024 * 1024 {
+        return Err(AppError(anyhow::anyhow!("Tripo image input exceeds 20 MB")));
+    }
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(format!("node-input.{extension}"))
+        .mime_str(mime)?;
+    let form = reqwest::multipart::Form::new().part("file", part);
+    let response = reqwest::Client::new()
+        .post("https://api.tripo3d.ai/v2/openapi/upload")
+        .bearer_auth(key)
+        .multipart(form)
+        .send()
+        .await?;
+    let status = response.status();
+    let raw: serde_json::Value = response.json().await.unwrap_or_default();
+    if !status.is_success() || raw["code"].as_i64().unwrap_or(0) != 0 {
+        return Err(AppError(anyhow::anyhow!("Tripo upload failed: {raw}")));
+    }
+    let token = raw["data"]["image_token"]
+        .as_str()
+        .ok_or_else(|| AppError(anyhow::anyhow!("Tripo upload returned no image token")))?;
+    Ok(Json(serde_json::json!({
+        "file_token": token,
+        "file_type": extension,
+    })))
+}
+
+#[derive(Deserialize)]
+struct ModelProxyQuery {
+    url: String,
+}
+
+/// Fetch a generated model through the local API so browser viewers are not
+/// blocked by provider storage CORS policies.
+async fn proxy_model(Query(query): Query<ModelProxyQuery>) -> AppResult<Response> {
+    let url = reqwest::Url::parse(&query.url)?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(AppError(anyhow::anyhow!("model URL must use http or https")));
+    }
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    if host.is_empty() || host == "localhost" || host.ends_with(".localhost") {
+        return Err(AppError(anyhow::anyhow!("invalid model host")));
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        let private = match ip {
+            std::net::IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+            std::net::IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local(),
+        };
+        if private || ip.is_loopback() || ip.is_unspecified() {
+            return Err(AppError(anyhow::anyhow!("invalid model host")));
+        }
+    }
+
+    let upstream = reqwest::Client::new().get(url).send().await?;
+    if !upstream.status().is_success() {
+        return Err(AppError(anyhow::anyhow!(
+            "model host returned HTTP {}",
+            upstream.status()
+        )));
+    }
+    if upstream.content_length().is_some_and(|length| length > 100 * 1024 * 1024) {
+        return Err(AppError(anyhow::anyhow!("model exceeds 100 MB proxy limit")));
+    }
+    let content_type = upstream
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| header::HeaderValue::from_static("model/gltf-binary"));
+    let bytes = upstream.bytes().await?;
+    if bytes.len() > 100 * 1024 * 1024 {
+        return Err(AppError(anyhow::anyhow!("model exceeds 100 MB proxy limit")));
+    }
+    let response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "private, max-age=3600")
+        .body(Body::from(bytes))?;
+    Ok(response)
 }
 
 fn append_mycontent_csv(prompt: &str, request_id: &str) {

@@ -23,6 +23,10 @@ class ArtsEngine {
     this._lastActivity = Date.now();
     this._healthProvider = '';
     this._healthOfflineSince = 0;
+    this._storyboardDbPromise = null;
+    this._storyboardSaveTimer = null;
+    this._storyboardPersistenceReady = false;
+    window.addEventListener('pagehide', () => this.saveStoryboardState());
 
     // Preferences (persisted to localStorage with ae_ prefix)
     this.prefs = {
@@ -113,9 +117,17 @@ class ArtsEngine {
     this.initModelTrigger();
     this.bindEvents();
     this.restorePrefs();
-    this.renderStoryboard();
     this.initGitHubWidget();
-    this.loadDefaultCSV();
+    this.restoreStoryboardState().then(restored => {
+      this._storyboardPersistenceReady = true;
+      this.renderPromptList();
+      this.renderStoryboard();
+      if (restored && this.selectedSceneIdx !== null && this.scenes[this.selectedSceneIdx - 1]) {
+        this.selectScene(this.selectedSceneIdx - 1);
+      } else if (!restored) {
+        this.loadDefaultCSV();
+      }
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -128,6 +140,72 @@ class ArtsEngine {
 
   savePref(key, val) {
     localStorage.setItem('ae_' + key, String(val));
+  }
+
+  openStoryboardDb() {
+    if (this._storyboardDbPromise) return this._storyboardDbPromise;
+    this._storyboardDbPromise = new Promise((resolve, reject) => {
+      if (!window.indexedDB) {
+        reject(new Error('IndexedDB is unavailable'));
+        return;
+      }
+      const request = window.indexedDB.open('arts-engine-storyboard', 1);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains('state')) {
+          request.result.createObjectStore('state');
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    return this._storyboardDbPromise;
+  }
+
+  async restoreStoryboardState() {
+    try {
+      const db = await this.openStoryboardDb();
+      const state = await new Promise((resolve, reject) => {
+        const request = db.transaction('state', 'readonly').objectStore('state').get('current');
+        request.onsuccess = () => resolve(request.result ?? null);
+        request.onerror = () => reject(request.error);
+      });
+      if (!state || state.version !== 1 || !Array.isArray(state.scenes)) return false;
+      this.scenes = state.scenes;
+      this.selectedSceneIdx = Number.isInteger(state.selectedSceneIdx)
+        ? state.selectedSceneIdx
+        : null;
+      return true;
+    } catch (err) {
+      console.warn('Storyboard state could not be restored:', err);
+      return false;
+    }
+  }
+
+  scheduleStoryboardSave() {
+    if (!this._storyboardPersistenceReady) return;
+    clearTimeout(this._storyboardSaveTimer);
+    this._storyboardSaveTimer = setTimeout(() => this.saveStoryboardState(), 150);
+  }
+
+  async saveStoryboardState() {
+    if (!this._storyboardPersistenceReady) return;
+    try {
+      const db = await this.openStoryboardDb();
+      const state = {
+        version: 1,
+        scenes: this.scenes,
+        selectedSceneIdx: this.selectedSceneIdx,
+      };
+      await new Promise((resolve, reject) => {
+        const transaction = db.transaction('state', 'readwrite');
+        transaction.objectStore('state').put(state, 'current');
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+    } catch (err) {
+      console.warn('Storyboard state could not be saved:', err);
+    }
   }
 
   restorePrefs() {
@@ -492,6 +570,7 @@ class ArtsEngine {
     // Scroll to node in storyboard
     const node = document.querySelector(`.ae-node-card[data-idx="${idx}"]`);
     if (node) node.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    this.scheduleStoryboardSave();
   }
   
   removeScene(idx) {
@@ -717,6 +796,7 @@ class ArtsEngine {
   renderStoryboard() {
     const container = document.getElementById('storyboardContainer');
     if (!container) return;
+    this.scheduleStoryboardSave();
 
     if (!this.scenes.length) {
       container.innerHTML = `
@@ -795,9 +875,10 @@ class ArtsEngine {
       const active = p.models.filter(m => m.active !== false);
       if (!active.length) continue;
       result[p.id] = active.map(m => ({
-        value: m.id,
+        value: p.id === 'pollinations' && m.id === 'flux-2-klein' ? 'klein' : m.id,
         label: m.name,
         outputs: ['text', ...(m.outputs || [])],
+        imageInput: m.imageInput === true,
         apiModel: m.apiModel,           // exact id/version for the provider API (config-driven)
         apiMode: m.apiMode,             // which task3d.modes entry this model uses
         noCreditsHint: m.noCreditsHint, // message shown when the account has no credits
@@ -885,7 +966,11 @@ class ArtsEngine {
 
   _syncModelPref() {
     const models = ArtsEngine.PROVIDER_MODELS[this.prefs.provider] || ArtsEngine.PROVIDER_MODELS.env;
-    const saved  = this.loadPref('model_' + this.prefs.provider, models[0].value);
+    let saved = this.loadPref('model_' + this.prefs.provider, models[0].value);
+    if (this.prefs.provider === 'pollinations' && saved === 'flux-2-klein') {
+      saved = 'klein';
+      this.savePref('model_pollinations', saved);
+    }
     this.prefs.model = models.find(m => m.value === saved) ? saved : models[0].value;
     this.syncOutputButtons();
   }
@@ -1157,6 +1242,7 @@ class ArtsEngine {
     this.lastRaw = data;
     this.renderRawPanel();
     if (this.scenes[sceneIdx]) this.scenes[sceneIdx].text = data.text || '';
+    this.scheduleStoryboardSave();
     this.appendTextResult(scene.prompt, data.text || '');
   }
 
